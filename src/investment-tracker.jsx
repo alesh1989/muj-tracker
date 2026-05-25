@@ -1297,6 +1297,13 @@ Použij skutečná historická data. Pokud ticker neexistuje, vrať {"error": "T
           }]
         })
       });
+      if (!resp.ok) {
+        let errMsg = `HTTP ${resp.status}`;
+        try { const eb = await resp.json(); errMsg = eb.error || JSON.stringify(eb); } catch {}
+        setError(`API chyba: ${errMsg}`);
+        setLoading(false);
+        return;
+      }
       const json = await resp.json();
       const text = json.content?.[0]?.text || "";
       const cleaned = text.replace(/```json|```/g,"").trim();
@@ -1753,6 +1760,8 @@ export default function App() {
   const [ratesStatus, setRatesStatus] = useState("idle"); // idle | loading | ok | error
 
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | ok | error | offline
+  const [darkMode, setDarkMode] = useState(true);
+  const [fontSize, setFontSize] = useState(13); // 11-17
 
   // ─── PERSIST — localStorage + Supabase sync ──────────────────────────────
   // Load: Supabase má přednost, localStorage jako fallback
@@ -1776,6 +1785,10 @@ export default function App() {
         if (fi) setFiSettings(JSON.parse(fi));
         if (po) setPortfolios(JSON.parse(po));
         if (ap) setActivePortfolioId(JSON.parse(ap));
+        const dm = localStorage.getItem("inv_darkMode");
+        const fs = localStorage.getItem("inv_fontSize");
+        if (dm !== null) setDarkMode(JSON.parse(dm));
+        if (fs !== null) setFontSize(JSON.parse(fs));
       } catch {}
 
       // 2. Pokud je Supabase nakonfigurováno, načti z cloudu (přepíše localStorage)
@@ -2044,25 +2057,29 @@ export default function App() {
 
   // ─── STYLES ────────────────────────────────────────────────────────────
   const S = {
-    app: { minHeight:"100vh", background:"#0a0f1e", color:"#e2e8f0", fontFamily:"'IBM Plex Mono','Courier New',monospace", fontSize:13 },
-    nav: { background:"#0d1424", borderBottom:"1px solid #1e293b", position:"sticky", top:0, zIndex:100 },
-    navTop: { padding:"0 20px", display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:"1px solid #0f172a" },
+    app: { minHeight:"100vh",
+      background: darkMode ? "#0a0f1e" : "#f1f5f9",
+      color: darkMode ? "#e2e8f0" : "#1e293b",
+      fontFamily:"'IBM Plex Mono','Courier New',monospace", fontSize },
+    // Light mode overrides applied via inline styles where needed
+    nav: { background: darkMode ? "#0d1424" : "#ffffff", borderBottom: darkMode ? "1px solid #1e293b" : "1px solid #e2e8f0", position:"sticky", top:0, zIndex:100 },
+    navTop: { padding:"0 20px", display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom: darkMode ? "1px solid #0f172a" : "1px solid #e2e8f0" },
     navTabs: { padding:"0 20px", display:"flex", alignItems:"center", gap:0, overflowX:"auto" },
     logo: { fontSize:13, fontWeight:700, color:"#6366f1", letterSpacing:"0.1em", whiteSpace:"nowrap", padding:"12px 0" },
     navBtn: (active) => ({ background:"none", border:"none", padding:"12px 14px", cursor:"pointer", fontSize:10, fontFamily:"inherit", color:active?"#6366f1":"#64748b", borderBottom:active?"2px solid #6366f1":"2px solid transparent", transition:"all 0.2s", whiteSpace:"nowrap", letterSpacing:"0.06em", textTransform:"uppercase" }),
     main: { padding:"20px", maxWidth:1200, margin:"0 auto" },
-    card: { background:"#0d1424", border:"1px solid #1e293b", borderRadius:8, padding:20, marginBottom:16 },
-    statCard: (accent="#6366f1") => ({ background:"#0d1424", border:"1px solid #1e293b", borderRadius:8, padding:18, borderLeft:`3px solid ${accent}` }),
+    card: { background: darkMode ? "#0d1424" : "#ffffff", border: darkMode ? "1px solid #1e293b" : "1px solid #e2e8f0", borderRadius:8, padding:20, marginBottom:16 },
+    statCard: (accent="#6366f1") => ({ background: darkMode ? "#0d1424" : "#ffffff", border: darkMode ? "1px solid #1e293b" : "1px solid #e2e8f0", borderRadius:8, padding:18, borderLeft:`3px solid ${accent}` }),
     label: { fontSize:10, color:"#475569", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:4 },
     badge: (color) => ({ display:"inline-block", padding:"2px 7px", borderRadius:4, fontSize:10, fontWeight:600, background:color+"22", color, letterSpacing:"0.05em", textTransform:"uppercase" }),
     btn: (v="primary") => ({ background:v==="primary"?"linear-gradient(135deg,#4f46e5,#6366f1)":v==="danger"?"#dc262622":"#1e293b", color:v==="primary"?"#fff":v==="danger"?"#ef4444":"#94a3b8", border:v==="outline"?"1px solid #334155":"none", borderRadius:6, padding:"8px 16px", cursor:"pointer", fontSize:11, fontFamily:"inherit", fontWeight:600, letterSpacing:"0.05em", transition:"all 0.2s" }),
-    input: { background:"#0a0f1e", border:"1px solid #334155", borderRadius:6, color:"#e2e8f0", padding:"8px 12px", fontSize:12, fontFamily:"inherit", width:"100%", boxSizing:"border-box" },
-    select: { background:"#0a0f1e", border:"1px solid #334155", borderRadius:6, color:"#e2e8f0", padding:"8px 12px", fontSize:12, fontFamily:"inherit", width:"100%", boxSizing:"border-box" },
+    input: { background: darkMode ? "#0a0f1e" : "#f8fafc", border: darkMode ? "1px solid #334155" : "1px solid #cbd5e1", borderRadius:6, color: darkMode ? "#e2e8f0" : "#1e293b", padding:"8px 12px", fontSize:12, fontFamily:"inherit", width:"100%", boxSizing:"border-box" },
+    select: { background: darkMode ? "#0a0f1e" : "#f8fafc", border: darkMode ? "1px solid #334155" : "1px solid #cbd5e1", borderRadius:6, color: darkMode ? "#e2e8f0" : "#1e293b", padding:"8px 12px", fontSize:12, fontFamily:"inherit", width:"100%", boxSizing:"border-box" },
     table: { width:"100%", borderCollapse:"collapse" },
     th: { textAlign:"left", padding:"10px 12px", fontSize:10, color:"#475569", borderBottom:"1px solid #1e293b", letterSpacing:"0.08em", textTransform:"uppercase" },
     td: { padding:"11px 12px", borderBottom:"1px solid #0f172a", fontSize:12 },
-    modal: { position:"fixed", inset:0, background:"#000b", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000, padding:20 },
-    modalBox: { background:"#0d1424", border:"1px solid #334155", borderRadius:12, padding:28, width:"100%", maxWidth:520, maxHeight:"90vh", overflowY:"auto" },
+    modal: { position:"fixed", inset:0, background:"#000b", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000, padding:20, backdropFilter:"blur(2px)" },
+    modalBox: { background: darkMode ? "#0d1424" : "#ffffff", border: darkMode ? "1px solid #334155" : "1px solid #e2e8f0", borderRadius:12, padding:28, width:"100%", maxWidth:520, maxHeight:"90vh", overflowY:"auto" },
     sectionTitle: { fontSize:10, fontWeight:700, color:"#475569", letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:14, paddingBottom:7, borderBottom:"1px solid #1e293b" },
   };
 
@@ -2116,6 +2133,19 @@ export default function App() {
               color: syncStatus==="ok"?"#10b981":syncStatus==="syncing"?"#f59e0b":syncStatus==="error"?"#ef4444":"#475569" }}>
               {syncStatus==="ok"?"☁ sync OK":syncStatus==="syncing"?"↻ ukládám...":syncStatus==="error"?"⚠ sync chyba":"💾 lokálně"}
             </span>
+            {/* Font size controls */}
+            <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+              <button style={{ ...S.btn("outline"), padding:"3px 8px", fontSize:14, lineHeight:1 }}
+                onClick={() => setFontSize(s => Math.max(11, s-1))} title="Zmenšit písmo">A-</button>
+              <span style={{ fontSize:10, color:"#475569", width:22, textAlign:"center" }}>{fontSize}</span>
+              <button style={{ ...S.btn("outline"), padding:"3px 8px", fontSize:14, lineHeight:1 }}
+                onClick={() => setFontSize(s => Math.min(17, s+1))} title="Zvětšit písmo">A+</button>
+            </div>
+            {/* Dark/light toggle */}
+            <button style={{ ...S.btn("outline"), padding:"5px 10px", fontSize:14 }}
+              onClick={() => setDarkMode(d => !d)} title={darkMode ? "Světlý režim" : "Tmavý režim"}>
+              {darkMode ? "☀" : "🌙"}
+            </button>
             <button style={{ ...S.btn("primary"), padding:"6px 14px" }} onClick={() => setShowAddTx(true)}>+ Transakce</button>
           </div>
         </div>
@@ -2441,6 +2471,20 @@ export default function App() {
                   alert(`Automaticky přidáno ${added} navrhovaných dividend na základě historického vzoru.`);
                 }}>🤖 Auto-dividendy</button>
                 <button style={{ ...S.btn("outline") }} onClick={() => setShowCsvImport(true)}>📂 Import CSV</button>
+                <button style={{ ...S.btn("outline") }} onClick={() => {
+                  // Export CSV
+                  const headers = ["type","ticker","name","category","date","quantity","price","currency","fee","dividendAmount","amount","notes"];
+                  const rows = activeTransactions.map(t => headers.map(h => {
+                    const v = t[h] ?? "";
+                    return String(v).includes(",") ? `"${v}"` : v;
+                  }).join(","));
+                  const csv = [headers.join(","), ...rows].join("\n");
+                  const blob = new Blob([csv], { type:"text/csv;charset=utf-8;" });
+                  const a = document.createElement("a");
+                  a.href = URL.createObjectURL(blob);
+                  a.download = `transakce-${portfolios.find(p=>p.id===activePortfolioId)?.name||"export"}-${new Date().toISOString().slice(0,10)}.csv`;
+                  a.click();
+                }}>📤 Export CSV</button>
                 <button style={{ ...S.btn("danger"), border:"1px solid #dc262644" }} onClick={() => setShowDeleteAll(true)}>🗑 Smazat vše</button>
                 <button style={S.btn("primary")} onClick={() => setShowAddTx(true)}>+ Přidat</button>
               </div>
