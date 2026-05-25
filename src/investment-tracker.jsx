@@ -1,4 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+// ─── SUPABASE CLIENT ─────────────────────────────────────────────────────────
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || "";
+const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
 // ─── FX RATES ────────────────────────────────────────────────────────────────
 const DEFAULT_RATES = { USD_CZK: 23.2, EUR_CZK: 25.4, CZK_CZK: 1, lastUpdated: null };
@@ -1162,35 +1168,105 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [ratesStatus, setRatesStatus] = useState("idle"); // idle | loading | ok | error
 
-  // ─── PERSIST (localStorage — funguje v prohlížeči i po refreshi) ──────────
+  const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | ok | error | offline
+
+  // ─── PERSIST — localStorage + Supabase sync ──────────────────────────────
+  // Load: Supabase má přednost, localStorage jako fallback
   useEffect(() => {
-    try {
-      const tx = localStorage.getItem("inv_transactions");
-      const pr = localStorage.getItem("inv_prices");
-      const ra = localStorage.getItem("inv_rates");
-      const di = localStorage.getItem("inv_dividends");
-      const ea = localStorage.getItem("inv_earnings");
-      const fi = localStorage.getItem("inv_fiSettings");
-      if (tx) setTransactions(JSON.parse(tx));
-      if (pr) setPrices(JSON.parse(pr));
-      if (ra) setRates(JSON.parse(ra));
-      if (di) setDividends(JSON.parse(di));
-      if (ea) setEarnings(JSON.parse(ea));
-      if (fi) setFiSettings(JSON.parse(fi));
-    } catch {}
-    setLoaded(true);
+    const load = async () => {
+      // 1. Nejdřív načti z localStorage (okamžité zobrazení)
+      try {
+        const tx = localStorage.getItem("inv_transactions");
+        const pr = localStorage.getItem("inv_prices");
+        const ra = localStorage.getItem("inv_rates");
+        const di = localStorage.getItem("inv_dividends");
+        const ea = localStorage.getItem("inv_earnings");
+        const fi = localStorage.getItem("inv_fiSettings");
+        if (tx) setTransactions(JSON.parse(tx));
+        if (pr) setPrices(JSON.parse(pr));
+        if (ra) setRates(JSON.parse(ra));
+        if (di) setDividends(JSON.parse(di));
+        if (ea) setEarnings(JSON.parse(ea));
+        if (fi) setFiSettings(JSON.parse(fi));
+      } catch {}
+
+      // 2. Pokud je Supabase nakonfigurováno, načti z cloudu (přepíše localStorage)
+      if (supabase) {
+        setSyncStatus("syncing");
+        try {
+          const { data, error } = await supabase
+            .from("portfolio_data")
+            .select("data")
+            .eq("id", "main")
+            .single();
+          if (!error && data?.data && Object.keys(data.data).length > 0) {
+            const d = data.data;
+            if (d.transactions) { setTransactions(d.transactions); localStorage.setItem("inv_transactions", JSON.stringify(d.transactions)); }
+            if (d.prices)       { setPrices(d.prices);             localStorage.setItem("inv_prices",       JSON.stringify(d.prices)); }
+            if (d.rates)        { setRates(d.rates);               localStorage.setItem("inv_rates",        JSON.stringify(d.rates)); }
+            if (d.dividends)    { setDividends(d.dividends);       localStorage.setItem("inv_dividends",    JSON.stringify(d.dividends)); }
+            if (d.earnings)     { setEarnings(d.earnings);         localStorage.setItem("inv_earnings",     JSON.stringify(d.earnings)); }
+            if (d.fiSettings)   { setFiSettings(d.fiSettings);     localStorage.setItem("inv_fiSettings",   JSON.stringify(d.fiSettings)); }
+            setSyncStatus("ok");
+          } else {
+            setSyncStatus("ok");
+          }
+        } catch { setSyncStatus("error"); }
+      } else {
+        setSyncStatus("offline");
+      }
+      setLoaded(true);
+    };
+    load();
   }, []);
 
-  const save = useCallback((key, val) => {
-    try { localStorage.setItem(`inv_${key}`, JSON.stringify(val)); } catch {}
+  // Debounced save — ukládá 1,5s po poslední změně aby nespamoval DB
+  const saveTimerRef = useRef(null);
+  const saveToCloud = useCallback((newData) => {
+    // Vždy ulož do localStorage okamžitě
+    Object.entries(newData).forEach(([k, v]) => {
+      try { localStorage.setItem(`inv_${k}`, JSON.stringify(v)); } catch {}
+    });
+    // Do Supabase s debounce
+    if (!supabase) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      setSyncStatus("syncing");
+      try {
+        const { error } = await supabase
+          .from("portfolio_data")
+          .upsert({ id: "main", data: newData, updated_at: new Date().toISOString() });
+        setSyncStatus(error ? "error" : "ok");
+      } catch { setSyncStatus("error"); }
+    }, 1500);
   }, []);
 
-  useEffect(() => { if (loaded) save("transactions", transactions); }, [transactions, loaded]);
-  useEffect(() => { if (loaded) save("prices", prices); }, [prices, loaded]);
-  useEffect(() => { if (loaded) save("rates", rates); }, [rates, loaded]);
-  useEffect(() => { if (loaded) save("dividends", dividends); }, [dividends, loaded]);
-  useEffect(() => { if (loaded) save("earnings", earnings); }, [earnings, loaded]);
-  useEffect(() => { if (loaded) save("fiSettings", fiSettings); }, [fiSettings, loaded]);
+  // Sleduj změny a ulož
+  useEffect(() => {
+    if (!loaded) return;
+    saveToCloud({ transactions, prices, rates, dividends, earnings, fiSettings });
+  }, [transactions, prices, rates, dividends, earnings, fiSettings, loaded]);
+
+  // Realtime sync — při změně z jiného zařízení se data obnoví
+  useEffect(() => {
+    if (!supabase || !loaded) return;
+    const channel = supabase
+      .channel("portfolio_changes")
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "portfolio_data", filter: "id=eq.main" },
+        (payload) => {
+          const d = payload.new?.data;
+          if (!d) return;
+          // Pouze přijmi pokud jsou data novější
+          if (d.transactions) setTransactions(d.transactions);
+          if (d.prices)       setPrices(d.prices);
+          if (d.dividends)    setDividends(d.dividends);
+          if (d.earnings)     setEarnings(d.earnings);
+          if (d.fiSettings)   setFiSettings(d.fiSettings);
+          setSyncStatus("ok");
+        })
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [loaded]);
 
   // ─── AUTO FETCH RATES ───────────────────────────────────────────────────
   const fetchRates = useCallback(async () => {
@@ -1363,11 +1439,16 @@ export default function App() {
       <nav style={S.nav}>
         <div style={S.navTop}>
           <div style={S.logo}>📈 INVESTTRACK</div>
-          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
             {ratesStatus === "loading" && <span style={{ fontSize:10, color:"#f59e0b" }}>↻ kurzy...</span>}
-            {ratesStatus === "ok" && <span style={{ fontSize:10, color:"#10b981" }}>✓ live</span>}
-            {ratesStatus === "error" && <span style={{ fontSize:10, color:"#ef4444" }}>offline</span>}
+            {ratesStatus === "ok" && <span style={{ fontSize:10, color:"#10b981" }}>✓ kurzy</span>}
+            {ratesStatus === "error" && <span style={{ fontSize:10, color:"#ef4444" }}>kurzy offline</span>}
             <span style={{ fontSize:10, color:"#334155" }}>USD {rates.USD_CZK} · EUR {rates.EUR_CZK}</span>
+            <span style={{ fontSize:10, padding:"2px 8px", borderRadius:10,
+              background: syncStatus==="ok"?"#10b98122":syncStatus==="syncing"?"#f59e0b22":syncStatus==="error"?"#ef444422":"#1e293b",
+              color: syncStatus==="ok"?"#10b981":syncStatus==="syncing"?"#f59e0b":syncStatus==="error"?"#ef4444":"#475569" }}>
+              {syncStatus==="ok"?"☁ sync OK":syncStatus==="syncing"?"↻ ukládám...":syncStatus==="error"?"⚠ sync chyba":"💾 lokálně"}
+            </span>
             <button style={{ ...S.btn("primary"), padding:"6px 14px" }} onClick={() => setShowAddTx(true)}>+ Transakce</button>
           </div>
         </div>
@@ -1982,7 +2063,30 @@ export default function App() {
             <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:14 }}>Nastavení</div>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
               <div style={S.card}>
-                <div style={S.sectionTitle}>Kurzy měn</div>
+                <div style={S.sectionTitle}>☁ Supabase sync</div>
+              <div style={{ padding:"12px 14px", background:"#0a0f1e", borderRadius:7, marginBottom:14, border:"1px solid #1e293b" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                  <div style={{ fontSize:12, color:"#f1f5f9", fontWeight:600 }}>Stav synchronizace</div>
+                  <span style={{ fontSize:11, padding:"3px 10px", borderRadius:10,
+                    background: syncStatus==="ok"?"#10b98122":syncStatus==="syncing"?"#f59e0b22":syncStatus==="error"?"#ef444422":"#1e293b",
+                    color: syncStatus==="ok"?"#10b981":syncStatus==="syncing"?"#f59e0b":syncStatus==="error"?"#ef4444":"#475569", fontWeight:600 }}>
+                    {syncStatus==="ok"?"☁ Synchronizováno":syncStatus==="syncing"?"↻ Ukládám...":syncStatus==="error"?"⚠ Chyba připojení":"💾 Pouze lokálně"}
+                  </span>
+                </div>
+                {!supabase ? (
+                  <div style={{ fontSize:11, color:"#64748b", lineHeight:1.7 }}>
+                    Supabase není nakonfigurován. Data se ukládají pouze lokálně v tomto prohlížeči.<br/>
+                    Pro synchronizaci mezi zařízeními přidej do souboru <code style={{color:"#6366f1"}}>.env</code>:<br/>
+                    <code style={{color:"#10b981",fontSize:10}}>VITE_SUPABASE_URL=https://xxx.supabase.co</code><br/>
+                    <code style={{color:"#10b981",fontSize:10}}>VITE_SUPABASE_KEY=tvuj-anon-klic</code>
+                  </div>
+                ) : (
+                  <div style={{ fontSize:11, color:"#10b981" }}>
+                    ✓ Supabase připojen — data se synchronizují mezi všemi zařízeními v reálném čase.
+                  </div>
+                )}
+              </div>
+              <div style={S.sectionTitle}>Kurzy měn</div>
                 <div style={{ display:"flex", gap:8, marginBottom:12 }}>
                   <button style={{ ...S.btn("primary"), flex:1 }} onClick={fetchRates}>
                     {ratesStatus==="loading"?"Načítám...":"↻ Aktualizovat kurzy online"}
@@ -2024,7 +2128,7 @@ export default function App() {
             <div style={S.card}>
               <div style={S.sectionTitle}>Záloha a reset</div>
               <div style={{ fontSize:11, color:"#475569", marginBottom:12 }}>
-                Data se automaticky ukládají do localStorage prohlížeče — přežijí refresh i zavření okna. Pro přenos mezi zařízeními použij export/import JSON.
+                Data se automaticky ukládají do localStorage i do Supabase cloudu (pokud je nakonfigurován). Sync indikátor ☁ je v pravém horním rohu. Pro ruční zálohu použij export JSON.
               </div>
               <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
                 <button style={S.btn("outline")} onClick={() => {
