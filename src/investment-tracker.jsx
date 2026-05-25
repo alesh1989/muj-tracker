@@ -981,6 +981,171 @@ function CsvImportModal({ onClose, onImport, S }) {
   );
 }
 
+
+// ─── NEWS TAB COMPONENT ───────────────────────────────────────────────────────
+function NewsTab({ portfolio, S }) {
+  const [news, setNews] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [activeFilter, setActiveFilter] = useState("vse");
+  const [error, setError] = useState("");
+  const [lastFetched, setLastFetched] = useState(null);
+
+  const tickers = portfolio.positions.map(p => p.ticker).filter(t => !["VKLAD","VÝBĚR"].includes(t));
+
+  // RSS feeds via allorigins proxy (CORS-free)
+  const RSS_FEEDS = [
+    { url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AAPL,MSFT,GOOGL&region=US&lang=en-US", label: "Yahoo Finance" },
+    { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", label: "CNBC Markets" },
+    { url: "https://feeds.bloomberg.com/markets/news.rss", label: "Bloomberg" },
+  ];
+
+  const fetchNews = async () => {
+    setLoading(true);
+    setError("");
+    const allNews = [];
+
+    // Fetch from multiple RSS via allorigins
+    for (const feed of RSS_FEEDS) {
+      try {
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(feed.url)}`;
+        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(data.contents, "text/xml");
+        const items = Array.from(xml.querySelectorAll("item")).slice(0, 15);
+        items.forEach(item => {
+          const title = item.querySelector("title")?.textContent || "";
+          const link = item.querySelector("link")?.textContent || "";
+          const pubDate = item.querySelector("pubDate")?.textContent || "";
+          const desc = item.querySelector("description")?.textContent?.replace(/<[^>]*>/g,"").slice(0,200) || "";
+          // Check which portfolio ticker this relates to
+          const relatedTickers = tickers.filter(t =>
+            title.toLowerCase().includes(t.toLowerCase()) ||
+            desc.toLowerCase().includes(t.toLowerCase())
+          );
+          allNews.push({
+            id: link + title,
+            title: title.slice(0, 120),
+            link,
+            desc,
+            date: pubDate ? new Date(pubDate) : new Date(),
+            source: feed.label,
+            tickers: relatedTickers,
+            isPortfolio: relatedTickers.length > 0,
+          });
+        });
+      } catch {}
+    }
+
+    // Deduplicate by title similarity
+    const seen = new Set();
+    const deduped = allNews.filter(n => {
+      const key = n.title.slice(0, 40).toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    deduped.sort((a, b) => b.date - a.date);
+
+    if (deduped.length === 0) {
+      setError("Nepodařilo se načíst novinky. Zkontroluj připojení k internetu.");
+    }
+
+    setNews(deduped.slice(0, 60));
+    setLastFetched(new Date());
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchNews(); }, []);
+
+  const filtered = activeFilter === "vse" ? news
+    : activeFilter === "portfolio" ? news.filter(n => n.isPortfolio)
+    : news.filter(n => n.tickers.includes(activeFilter));
+
+  const portfolioNews = news.filter(n => n.isPortfolio).length;
+
+  return (
+    <>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14, flexWrap:"wrap", gap:8 }}>
+        <div>
+          <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9" }}>📰 Novinky & Zprávy</div>
+          {lastFetched && <div style={{ fontSize:10, color:"#475569", marginTop:2 }}>Aktualizováno: {lastFetched.toLocaleTimeString("cs-CZ")}</div>}
+        </div>
+        <button style={{ ...S.btn("primary"), padding:"7px 14px" }} onClick={fetchNews} disabled={loading}>
+          {loading ? "⟳ Načítám..." : "↻ Aktualizovat"}
+        </button>
+      </div>
+
+      {/* Filter bar */}
+      <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"wrap" }}>
+        {[
+          ["vse", `Vše (${news.length})`],
+          ["portfolio", `Moje portfolio (${portfolioNews})`],
+          ...tickers.slice(0,8).map(t => [t, t]),
+        ].map(([val, label]) => (
+          <button key={val} style={{ ...S.btn(activeFilter===val?"primary":"outline"), padding:"5px 12px", fontSize:10 }}
+            onClick={() => setActiveFilter(val)}>{label}</button>
+        ))}
+      </div>
+
+      {error && (
+        <div style={{ color:"#ef4444", fontSize:12, padding:"12px 16px", background:"#ef444411", borderRadius:6, marginBottom:14, border:"1px solid #ef444433" }}>
+          ⚠ {error}
+          <div style={{ fontSize:10, color:"#64748b", marginTop:4 }}>Zkus kliknout na Aktualizovat. Některé RSS zdroje mohou být dočasně nedostupné.</div>
+        </div>
+      )}
+
+      {loading && (
+        <div style={{ display:"flex", gap:10, flexDirection:"column" }}>
+          {[1,2,3,4,5].map(i => (
+            <div key={i} style={{ background:"#0d1424", border:"1px solid #1e293b", borderRadius:8, padding:16, animation:"pulse 1.5s infinite" }}>
+              <div style={{ height:12, background:"#1e293b", borderRadius:4, width:"70%", marginBottom:8 }}/>
+              <div style={{ height:8, background:"#1e293b", borderRadius:4, width:"40%" }}/>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!loading && (
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          {filtered.length === 0 && !error && (
+            <div style={{ color:"#475569", fontSize:12, textAlign:"center", padding:40 }}>
+              {activeFilter === "portfolio" ? "Žádné novinky o tvých akciích" : "Žádné novinky"}
+            </div>
+          )}
+          {filtered.map((n, i) => (
+            <a key={i} href={n.link} target="_blank" rel="noopener noreferrer" style={{ textDecoration:"none" }}>
+              <div style={{ background:"#0d1424", border:`1px solid ${n.isPortfolio?"#6366f133":"#1e293b"}`, borderLeft:`3px solid ${n.isPortfolio?"#6366f1":"#1e293b"}`, borderRadius:8, padding:"14px 16px", cursor:"pointer", transition:"border-color 0.2s" }}
+                onMouseEnter={e=>e.currentTarget.style.borderColor="#334155"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=n.isPortfolio?"#6366f133":"#1e293b"}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, marginBottom:6 }}>
+                  <div style={{ fontSize:12, fontWeight:600, color:"#f1f5f9", lineHeight:1.4, flex:1 }}>{n.title}</div>
+                  <div style={{ fontSize:9, color:"#475569", whiteSpace:"nowrap", flexShrink:0, marginTop:2 }}>
+                    {n.date.toLocaleDateString("cs-CZ")}
+                  </div>
+                </div>
+                {n.desc && <div style={{ fontSize:11, color:"#64748b", lineHeight:1.5, marginBottom:8 }}>{n.desc}...</div>}
+                <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
+                  <span style={{ fontSize:9, color:"#475569", background:"#1e293b", padding:"2px 8px", borderRadius:10 }}>{n.source}</span>
+                  {n.tickers.map(t => (
+                    <span key={t} style={{ fontSize:9, color:"#6366f1", background:"#6366f111", padding:"2px 8px", borderRadius:10, fontWeight:700 }}>{t}</span>
+                  ))}
+                  {n.isPortfolio && <span style={{ fontSize:9, color:"#10b981", background:"#10b98111", padding:"2px 8px", borderRadius:10 }}>📊 tvé portfolio</span>}
+                  <span style={{ fontSize:9, color:"#334155", marginLeft:"auto" }}>→ přejít na článek</span>
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }`}</style>
+    </>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [transactions, setTransactions] = useState(SAMPLE_TRANSACTIONS);
@@ -997,31 +1162,34 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [ratesStatus, setRatesStatus] = useState("idle"); // idle | loading | ok | error
 
-  // ─── PERSIST ────────────────────────────────────────────────────────────
+  // ─── PERSIST (localStorage — funguje v prohlížeči i po refreshi) ──────────
   useEffect(() => {
-    const load = async () => {
-      try {
-        const keys = ["transactions","prices","rates","dividends","earnings","fiSettings"];
-        const results = await Promise.all(keys.map(k => window.storage.get(`inv_${k}`).catch(() => null)));
-        if (results[0]) setTransactions(JSON.parse(results[0].value));
-        if (results[1]) setPrices(JSON.parse(results[1].value));
-        if (results[2]) setRates(JSON.parse(results[2].value));
-        if (results[3]) setDividends(JSON.parse(results[3].value));
-        if (results[4]) setEarnings(JSON.parse(results[4].value));
-        if (results[5]) setFiSettings(JSON.parse(results[5].value));
-      } catch {}
-      setLoaded(true);
-    };
-    load();
+    try {
+      const tx = localStorage.getItem("inv_transactions");
+      const pr = localStorage.getItem("inv_prices");
+      const ra = localStorage.getItem("inv_rates");
+      const di = localStorage.getItem("inv_dividends");
+      const ea = localStorage.getItem("inv_earnings");
+      const fi = localStorage.getItem("inv_fiSettings");
+      if (tx) setTransactions(JSON.parse(tx));
+      if (pr) setPrices(JSON.parse(pr));
+      if (ra) setRates(JSON.parse(ra));
+      if (di) setDividends(JSON.parse(di));
+      if (ea) setEarnings(JSON.parse(ea));
+      if (fi) setFiSettings(JSON.parse(fi));
+    } catch {}
+    setLoaded(true);
   }, []);
 
-  const save = useCallback(async (key, val) => {
-    try { await window.storage.set(`inv_${key}`, JSON.stringify(val)); } catch {}
+  const save = useCallback((key, val) => {
+    try { localStorage.setItem(`inv_${key}`, JSON.stringify(val)); } catch {}
   }, []);
 
   useEffect(() => { if (loaded) save("transactions", transactions); }, [transactions, loaded]);
   useEffect(() => { if (loaded) save("prices", prices); }, [prices, loaded]);
   useEffect(() => { if (loaded) save("rates", rates); }, [rates, loaded]);
+  useEffect(() => { if (loaded) save("dividends", dividends); }, [dividends, loaded]);
+  useEffect(() => { if (loaded) save("earnings", earnings); }, [earnings, loaded]);
   useEffect(() => { if (loaded) save("fiSettings", fiSettings); }, [fiSettings, loaded]);
 
   // ─── AUTO FETCH RATES ───────────────────────────────────────────────────
@@ -1064,6 +1232,10 @@ export default function App() {
         holdings[t.ticker].totalQty -= t.quantity;
       } else if (t.type === "dividend" && t.dividendAmount) {
         totalDividendsCZK += toCZK(t.dividendAmount, t.currency, rates);
+      } else if (t.type === "deposit") {
+        totalInvestedCZK += toCZK(t.amount || 0, t.currency, rates);
+      } else if (t.type === "withdraw") {
+        totalInvestedCZK -= toCZK(t.amount || 0, t.currency, rates);
       }
     });
     let totalCurrentCZK = 0;
@@ -1117,10 +1289,21 @@ export default function App() {
   const [newTx, setNewTx] = useState({ type:"buy", ticker:"", name:"", category:"stock", date:new Date().toISOString().slice(0,10), quantity:"", price:"", currency:"USD", fee:"", dividendAmount:"", notes:"" });
 
   const addTransaction = () => {
-    if (!newTx.ticker) return;
-    const tx = { ...newTx, id:`t${Date.now()}`, quantity:parseFloat(newTx.quantity)||0, price:parseFloat(newTx.price)||0, fee:parseFloat(newTx.fee)||0, dividendAmount:parseFloat(newTx.dividendAmount)||0 };
+    const isFlow = newTx.type === "deposit" || newTx.type === "withdraw";
+    if (!isFlow && !newTx.ticker) return;
+    if (isFlow && !newTx.amount) return;
+    const tx = { ...newTx, id:`t${Date.now()}`,
+      ticker: isFlow ? (newTx.type === "deposit" ? "VKLAD" : "VÝBĚR") : newTx.ticker,
+      name: isFlow ? (newTx.type === "deposit" ? "Vklad hotovosti" : "Výběr hotovosti") : newTx.name,
+      category: isFlow ? "cash" : newTx.category,
+      quantity: parseFloat(newTx.quantity)||0,
+      price: parseFloat(newTx.price)||0,
+      fee: parseFloat(newTx.fee)||0,
+      dividendAmount: parseFloat(newTx.dividendAmount)||0,
+      amount: parseFloat(newTx.amount)||0,
+    };
     setTransactions(prev => [...prev, tx]);
-    setNewTx({ type:"buy", ticker:"", name:"", category:"stock", date:new Date().toISOString().slice(0,10), quantity:"", price:"", currency:"USD", fee:"", dividendAmount:"", notes:"" });
+    setNewTx({ type:"buy", ticker:"", name:"", category:"stock", date:new Date().toISOString().slice(0,10), quantity:"", price:"", currency:"USD", fee:"", dividendAmount:"", amount:"", notes:"" });
     setShowAddTx(false);
   };
 
@@ -1162,8 +1345,8 @@ export default function App() {
   const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b" };
   const catLabel = { stock:"Akcie", etf:"ETF", crypto:"Crypto" };
 
-  const TABS = ["dashboard","portfolio","transakce","dividendy","analyza","fi","nastaveni"];
-  const TAB_LABELS = { dashboard:"Přehled", portfolio:"Portfolio", transakce:"Transakce", dividendy:"Dividendy", analyza:"Analýza", fi:"FI Kalkulačka", nastaveni:"Nastavení" };
+  const TABS = ["dashboard","portfolio","transakce","cashflow","dividendy","novinky","analyza","fi","nastaveni"];
+  const TAB_LABELS = { dashboard:"Přehled", portfolio:"Portfolio", transakce:"Transakce", cashflow:"Vklady/Výběry", dividendy:"Dividendy", novinky:"Novinky", analyza:"Analýza", fi:"FI Kalkulačka", nastaveni:"Nastavení" };
   const filtered = filterCat === "all" ? portfolio.positions : portfolio.positions.filter(p => p.category === filterCat);
 
   if (!loaded) return (
@@ -1380,95 +1563,309 @@ export default function App() {
         )}
 
         {/* ─── DIVIDENDY ─────────────────────────────────────────────────── */}
-        {tab === "dividendy" && (
+        {/* ─── CASHFLOW / VKLADY & VÝBĚRY ────────────────────────────────── */}
+        {tab === "cashflow" && (
           <>
-            <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:14 }}>Dividendový & Earnings kalendář</div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
-              <div style={S.statCard("#8b5cf6")}>
-                <div style={S.label}>Přijaté dividendy celkem</div>
-                <div style={{ fontSize:20, fontWeight:700, color:"#8b5cf6" }}>{fmt(portfolio.totalDividendsCZK,"CZK",0)}</div>
-              </div>
-              <div style={S.statCard("#6366f1")}>
-                <div style={S.label}>Odhadovaný roční příjem</div>
-                <div style={{ fontSize:20, fontWeight:700, color:"#6366f1" }}>
-                  {fmt(dividends.reduce((s,d) => { const pos=portfolio.positions.find(p=>p.ticker===d.ticker); return s+(pos&&d.perShare?toCZK(d.amount*pos.totalQty*4,d.currency,rates):0); },0),"CZK",0)}
-                </div>
-                <div style={{ fontSize:10, color:"#64748b", marginTop:3 }}>odhad (4× kvartální)</div>
-              </div>
-            </div>
-            <div style={S.card}>
-              <div style={S.sectionTitle}>Nadcházející výplaty dividend</div>
-              <table style={S.table}>
-                <thead><tr>{["Ticker","Datum","Dividenda/ks","Vaše ks","Odhadovaná výplata CZK",""].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
-                <tbody>
-                  {dividends.sort((a,b)=>new Date(a.date)-new Date(b.date)).map((d,i) => {
-                    const pos=portfolio.positions.find(p=>p.ticker===d.ticker);
-                    const totalEst=pos&&d.perShare?toCZK(d.amount*pos.totalQty,d.currency,rates):null;
-                    return (
-                      <tr key={i}>
-                        <td style={{ ...S.td, fontWeight:600, color:"#f1f5f9" }}>{d.ticker}</td>
-                        <td style={S.td}>{fmtDate(d.date)}</td>
-                        <td style={{ ...S.td, color:"#8b5cf6" }}>{d.amount} {d.currency}</td>
-                        <td style={S.td}>{pos?pos.totalQty.toFixed(2):"–"}</td>
-                        <td style={{ ...S.td, fontWeight:600, color:"#8b5cf6" }}>{totalEst?fmt(totalEst,"CZK",0):"–"}</td>
-                        <td style={S.td}><button style={{ ...S.btn("danger"), padding:"3px 8px" }} onClick={()=>setDividends(prev=>prev.filter((_,j)=>j!==i))}>✕</button></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <div style={{ marginTop:14, display:"flex", gap:8, flexWrap:"wrap" }}>
-                {[{label:"Ticker",id:"div_t",ph:"AAPL",type:"text"},{label:"Datum",id:"div_d",ph:"",type:"date"},{label:"Částka/ks",id:"div_a",ph:"0.25",type:"number"},{label:"Měna",id:"div_c",ph:"",type:"select",opts:["USD","EUR","CZK"]}].map(f => (
-                  <div key={f.id} style={{ flex:1, minWidth:90 }}>
-                    <div style={{ fontSize:10, color:"#475569", marginBottom:4 }}>{f.label}</div>
-                    {f.type==="select"
-                      ? <select id={f.id} style={S.select}>{f.opts.map(o=><option key={o}>{o}</option>)}</select>
-                      : <input id={f.id} type={f.type} placeholder={f.ph} style={S.input}/>}
+            <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:14 }}>💰 Vklady & Výběry</div>
+            {(() => {
+              const flows = transactions.filter(t => t.type==="deposit"||t.type==="withdraw");
+              const totalDeposits = flows.filter(t=>t.type==="deposit").reduce((s,t)=>s+toCZK(t.amount||0,t.currency,rates),0);
+              const totalWithdraws = flows.filter(t=>t.type==="withdraw").reduce((s,t)=>s+toCZK(t.amount||0,t.currency,rates),0);
+              const netCash = totalDeposits - totalWithdraws;
+              const roi = netCash > 0 ? ((portfolio.totalCurrentCZK - netCash) / netCash * 100) : 0;
+              return (
+                <>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:16 }}>
+                    {[
+                      {label:"Celkové vklady",value:fmt(totalDeposits,"CZK",0),accent:"#10b981"},
+                      {label:"Celkové výběry",value:fmt(totalWithdraws,"CZK",0),accent:"#ef4444"},
+                      {label:"Čistý vklad",value:fmt(netCash,"CZK",0),accent:"#6366f1"},
+                      {label:"ROI na vložený kapitál",value:roi.toFixed(1)+"%",accent:roi>=0?"#10b981":"#ef4444"},
+                      {label:"Aktuální hodnota portfolia",value:fmt(portfolio.totalCurrentCZK,"CZK",0),accent:"#f59e0b"},
+                      {label:"Absolutní zisk",value:fmt(portfolio.totalCurrentCZK-netCash,"CZK",0),accent:portfolio.totalCurrentCZK>=netCash?"#10b981":"#ef4444"},
+                    ].map((s,i)=>(
+                      <div key={i} style={S.statCard(s.accent)}>
+                        <div style={S.label}>{s.label}</div>
+                        <div style={{fontSize:17,fontWeight:700,color:s.accent}}>{s.value}</div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-                <div style={{ display:"flex", alignItems:"flex-end" }}>
-                  <button style={S.btn("primary")} onClick={() => {
-                    const t=document.getElementById("div_t").value, d=document.getElementById("div_d").value, a=parseFloat(document.getElementById("div_a").value), c=document.getElementById("div_c").value;
-                    if(!t||!d||isNaN(a)) return;
-                    setDividends(prev=>[...prev,{ticker:t.toUpperCase(),date:d,amount:a,perShare:true,currency:c}]);
-                  }}>Přidat</button>
-                </div>
-              </div>
-            </div>
-            <div style={S.card}>
-              <div style={S.sectionTitle}>📊 Earnings kalendář</div>
-              <table style={S.table}>
-                <thead><tr>{["Ticker","Datum","Čas","Odhad EPS",""].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
-                <tbody>
-                  {earnings.sort((a,b)=>new Date(a.date)-new Date(b.date)).map((e,i) => (
-                    <tr key={i}>
-                      <td style={{ ...S.td, fontWeight:600 }}>{e.ticker}</td>
-                      <td style={S.td}>{fmtDate(e.date)}</td>
-                      <td style={S.td}>{e.time==="after-close"?"Po zavření":"Před otevřením"}</td>
-                      <td style={{ ...S.td, color:"#f59e0b" }}>{e.estimate}</td>
-                      <td style={S.td}><button style={{ ...S.btn("danger"), padding:"3px 8px" }} onClick={()=>setEarnings(prev=>prev.filter((_,j)=>j!==i))}>✕</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div style={{ marginTop:10, display:"flex", gap:8, flexWrap:"wrap" }}>
-                {[{label:"Ticker",id:"e_t",ph:"MSFT",type:"text"},{label:"Datum",id:"e_d",ph:"",type:"date"},{label:"Odhad EPS",id:"e_e",ph:"1.42 EPS",type:"text"}].map(f=>(
-                  <div key={f.id} style={{ flex:1, minWidth:100 }}>
-                    <div style={{ fontSize:10, color:"#475569", marginBottom:4 }}>{f.label}</div>
-                    <input id={f.id} type={f.type} placeholder={f.ph} style={S.input}/>
+                  <div style={S.card}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                      <div style={S.sectionTitle}>Historie vkladů a výběrů</div>
+                      <button style={S.btn("primary")} onClick={()=>{ setNewTx(p=>({...p,type:"deposit"})); setShowAddTx(true); }}>+ Přidat vklad/výběr</button>
+                    </div>
+                    {flows.length===0 ? (
+                      <div style={{color:"#475569",fontSize:12,padding:20,textAlign:"center"}}>
+                        Zatím žádné vklady ani výběry.<br/>
+                        <button style={{...S.btn("primary"),marginTop:12}} onClick={()=>{setNewTx(p=>({...p,type:"deposit"}));setShowAddTx(true);}}>+ Přidat první vklad</button>
+                      </div>
+                    ) : (
+                      <table style={S.table}>
+                        <thead><tr>{["Datum","Typ","Částka","Měna","Částka CZK","Poplatek","Poznámka",""].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                        <tbody>
+                          {[...flows].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>(
+                            <tr key={t.id}>
+                              <td style={S.td}>{fmtDate(t.date)}</td>
+                              <td style={S.td}>
+                                <span style={{...S.badge(t.type==="deposit"?"#10b981":"#ef4444")}}>
+                                  {t.type==="deposit"?"💰 Vklad":"💸 Výběr"}
+                                </span>
+                              </td>
+                              <td style={{...S.td,fontWeight:600,color:t.type==="deposit"?"#10b981":"#ef4444"}}>
+                                {t.type==="deposit"?"+":"-"}{(t.amount||0).toLocaleString("cs-CZ")}
+                              </td>
+                              <td style={S.td}>{t.currency}</td>
+                              <td style={{...S.td,fontWeight:600}}>{fmt(toCZK(t.amount||0,t.currency,rates),"CZK",0)}</td>
+                              <td style={S.td}>{t.fee?fmt(t.fee,t.currency,2):"–"}</td>
+                              <td style={{...S.td,color:"#64748b"}}>{t.notes||"–"}</td>
+                              <td style={S.td}><button style={{...S.btn("danger"),padding:"3px 8px"}} onClick={()=>setTransactions(prev=>prev.filter(x=>x.id!==t.id))}>✕</button></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
-                ))}
-                <div style={{ display:"flex", alignItems:"flex-end" }}>
-                  <button style={S.btn("primary")} onClick={() => {
-                    const t=document.getElementById("e_t").value, d=document.getElementById("e_d").value, e=document.getElementById("e_e").value;
-                    if(!t||!d) return;
-                    setEarnings(prev=>[...prev,{ticker:t.toUpperCase(),date:d,time:"after-close",estimate:e}]);
-                  }}>Přidat</button>
-                </div>
-              </div>
-            </div>
+                  <div style={S.card}>
+                    <div style={S.sectionTitle}>Vývoj čistého vkladu vs. hodnota portfolia</div>
+                    {(() => {
+                      const allTx = [...transactions].sort((a,b)=>new Date(a.date)-new Date(b.date));
+                      if(!allTx.length) return <div style={{color:"#475569",fontSize:12}}>Žádná data</div>;
+                      const months=[];
+                      const first=new Date(allTx[0].date);
+                      const now=new Date();
+                      let cur=new Date(first.getFullYear(),first.getMonth(),1);
+                      while(cur<=now){
+                        const txSoFar=allTx.filter(t=>new Date(t.date)<=cur);
+                        let dep=0,wit=0,inv=0;
+                        const h={};
+                        txSoFar.forEach(t=>{
+                          if(t.type==="deposit") dep+=toCZK(t.amount||0,t.currency,rates);
+                          else if(t.type==="withdraw") wit+=toCZK(t.amount||0,t.currency,rates);
+                          else if(t.type==="buy"){inv+=toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates);h[t.ticker]=(h[t.ticker]||0)+t.quantity;}
+                          else if(t.type==="sell"&&h[t.ticker]) h[t.ticker]-=t.quantity;
+                        });
+                        let portVal=0;
+                        Object.entries(h).forEach(([tk,qty])=>{const p=prices[tk];if(p)portVal+=toCZK(qty*p.price,p.currency,rates);});
+                        months.push({label:`${cur.getMonth()+1}/${String(cur.getFullYear()).slice(2)}`,net:dep-wit,inv,portVal});
+                        cur=new Date(cur.getFullYear(),cur.getMonth()+1,1);
+                      }
+                      if(months.length<2) return null;
+                      const maxV=Math.max(...months.map(m=>Math.max(m.net,m.portVal)),1);
+                      const w=560,h2=140,pad={t:8,b:24,l:56,r:8};
+                      const iW=w-pad.l-pad.r,iH=h2-pad.t-pad.b;
+                      const xS=(i)=>pad.l+(i/(months.length-1))*iW;
+                      const yS=(v)=>pad.t+iH-(v/maxV)*iH;
+                      const step=Math.max(1,Math.floor(months.length/8));
+                      const netPath=months.map((m,i)=>`${i===0?"M":"L"}${xS(i)},${yS(m.net)}`).join(" ");
+                      const portPath=months.map((m,i)=>`${i===0?"M":"L"}${xS(i)},${yS(m.portVal)}`).join(" ");
+                      return(
+                        <div style={{overflowX:"auto"}}>
+                          <svg viewBox={`0 0 ${w} ${h2}`} style={{width:"100%",minWidth:300,height:"auto"}}>
+                            <defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#10b981" stopOpacity="0.15"/><stop offset="100%" stopColor="#10b981" stopOpacity="0"/></linearGradient></defs>
+                            {[0,.25,.5,.75,1].map(t=>(
+                              <g key={t}>
+                                <line x1={pad.l} y1={pad.t+iH*t} x2={w-pad.r} y2={pad.t+iH*t} stroke="#1e293b" strokeWidth="1"/>
+                                <text x={pad.l-4} y={pad.t+iH*t+4} textAnchor="end" fill="#475569" fontSize="8">{(maxV*(1-t)/1000).toFixed(0)}k</text>
+                              </g>
+                            ))}
+                            {months.filter((_,i)=>i%step===0).map((m,i)=>(
+                              <text key={i} x={xS(months.findIndex(x=>x===m))} y={h2-4} textAnchor="middle" fill="#475569" fontSize="8">{m.label}</text>
+                            ))}
+                            <path d={netPath+` L${xS(months.length-1)},${yS(0)} L${xS(0)},${yS(0)} Z`} fill="url(#cg)"/>
+                            <path d={netPath} fill="none" stroke="#10b981" strokeWidth="1.5" strokeDasharray="4,3"/>
+                            <path d={portPath} fill="none" stroke="#6366f1" strokeWidth="2"/>
+                          </svg>
+                          <div style={{display:"flex",gap:16,marginTop:6,fontSize:10,color:"#94a3b8"}}>
+                            <span><span style={{color:"#6366f1"}}>──</span> Hodnota portfolia</span>
+                            <span><span style={{color:"#10b981"}}>- -</span> Čistý vklad</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </>
+              );
+            })()}
           </>
         )}
+
+        {tab === "dividendy" && (
+          <>
+            <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:14 }}>📅 Dividendový kalendář</div>
+            {(() => {
+              const now = new Date();
+              const selYear = now.getFullYear();
+              const MONTHS_CS = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
+              // Build monthly dividend data
+              const monthlyData = Array.from({length:12},(_,mi)=>{
+                const received = transactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===selYear&&new Date(t.date).getMonth()===mi)
+                  .reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency,rates),0);
+                const upcoming = dividends.filter(d=>new Date(d.date).getFullYear()===selYear&&new Date(d.date).getMonth()===mi)
+                  .reduce((s,d)=>{
+                    const pos=portfolio.positions.find(p=>p.ticker===d.ticker);
+                    return s+(pos&&d.perShare?toCZK(d.amount*pos.totalQty,d.currency,rates):0);
+                  },0);
+                return {month:mi,label:MONTHS_CS[mi],received,upcoming,total:received+upcoming};
+              });
+              const totalReceived=monthlyData.reduce((s,m)=>s+m.received,0);
+              const totalUpcoming=monthlyData.reduce((s,m)=>s+m.upcoming,0);
+              const maxMonth=Math.max(...monthlyData.map(m=>m.total),1);
+              const annualEst=dividends.reduce((s,d)=>{const pos=portfolio.positions.find(p=>p.ticker===d.ticker);return s+(pos&&d.perShare?toCZK(d.amount*pos.totalQty*4,d.currency,rates):0);},0);
+              return (
+                <>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(148px,1fr))",gap:12,marginBottom:16}}>
+                    {[
+                      {label:"Přijato "+selYear,value:fmt(totalReceived,"CZK",0),accent:"#10b981"},
+                      {label:"Očekáváno do konce roku",value:fmt(totalUpcoming,"CZK",0),accent:"#6366f1"},
+                      {label:"Celkem "+selYear,value:fmt(totalReceived+totalUpcoming,"CZK",0),accent:"#8b5cf6"},
+                      {label:"Roční odhad (4× kv.)",value:fmt(annualEst,"CZK",0),accent:"#f59e0b"},
+                    ].map((s,i)=>(
+                      <div key={i} style={S.statCard(s.accent)}>
+                        <div style={S.label}>{s.label}</div>
+                        <div style={{fontSize:17,fontWeight:700,color:s.accent}}>{s.value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* MONTHLY CALENDAR GRID */}
+                  <div style={S.card}>
+                    <div style={S.sectionTitle}>Měsíční přehled {selYear}</div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(170px,1fr))",gap:10,marginBottom:16}}>
+                      {monthlyData.map(m=>{
+                        const isCurrentMonth=m.month===now.getMonth()&&selYear===now.getFullYear();
+                        const isPast=new Date(selYear,m.month+1,1)<=now;
+                        const hasDivs=dividends.filter(d=>new Date(d.date).getMonth()===m.month&&new Date(d.date).getFullYear()===selYear);
+                        return(
+                          <div key={m.month} style={{background:isCurrentMonth?"#1e2d4a":"#0a0f1e",border:`1px solid ${isCurrentMonth?"#6366f1":"#1e293b"}`,borderRadius:8,padding:12}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                              <div style={{fontSize:11,fontWeight:700,color:isCurrentMonth?"#6366f1":"#94a3b8"}}>{m.label}</div>
+                              {isPast&&m.month<now.getMonth()?(
+                                <span style={{fontSize:9,color:"#10b981",background:"#10b98111",padding:"1px 6px",borderRadius:10}}>✓ přijato</span>
+                              ):m.upcoming>0?(
+                                <span style={{fontSize:9,color:"#f59e0b",background:"#f59e0b11",padding:"1px 6px",borderRadius:10}}>očekáváno</span>
+                              ):null}
+                            </div>
+                            {/* Bar */}
+                            <div style={{height:4,background:"#1e293b",borderRadius:2,marginBottom:8,overflow:"hidden"}}>
+                              <div style={{height:"100%",width:`${(m.total/maxMonth)*100}%`,background:m.received>0?"linear-gradient(90deg,#059669,#10b981)":"linear-gradient(90deg,#4338ca,#6366f1)",borderRadius:2}}/>
+                            </div>
+                            {m.received>0&&<div style={{fontSize:11,color:"#10b981",fontWeight:600}}>{fmt(m.received,"CZK",0)}</div>}
+                            {m.upcoming>0&&<div style={{fontSize:11,color:"#6366f1"}}>{fmt(m.upcoming,"CZK",0)} <span style={{fontSize:9,color:"#475569"}}>oček.</span></div>}
+                            {m.total===0&&<div style={{fontSize:10,color:"#334155"}}>–</div>}
+                            {hasDivs.map((d,i)=>(
+                              <div key={i} style={{fontSize:9,color:"#475569",marginTop:4}}>{d.ticker} · {fmtDate(d.date)}</div>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Bar chart */}
+                    <div style={S.sectionTitle}>Graf dividendového příjmu</div>
+                    <div style={{display:"flex",gap:4,alignItems:"flex-end",height:100,padding:"0 4px"}}>
+                      {monthlyData.map(m=>{
+                        const isCurrentMonth=m.month===now.getMonth();
+                        const recH=maxMonth>0?(m.received/maxMonth)*90:0;
+                        const upH=maxMonth>0?(m.upcoming/maxMonth)*90:0;
+                        return(
+                          <div key={m.month} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:1}}>
+                            <div style={{width:"100%",display:"flex",flexDirection:"column",justifyContent:"flex-end",height:90,gap:1}}>
+                              {upH>0&&<div style={{width:"100%",height:upH,background:"#4338ca44",borderRadius:"2px 2px 0 0",border:"1px solid #6366f133"}}/>}
+                              {recH>0&&<div style={{width:"100%",height:recH,background:isCurrentMonth?"#059669":"#10b98177",borderRadius:upH>0?"0":"2px 2px 0 0"}}/>}
+                              {recH===0&&upH===0&&<div style={{width:"100%",height:3,background:"#1e293b",borderRadius:2,marginTop:"auto"}}/>}
+                            </div>
+                            <div style={{fontSize:7,color:isCurrentMonth?"#6366f1":"#334155",textAlign:"center"}}>{m.label.slice(0,3)}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{display:"flex",gap:16,marginTop:8,fontSize:10,color:"#94a3b8"}}>
+                      <span><span style={{color:"#10b981"}}>█</span> Přijato</span>
+                      <span><span style={{color:"#4338ca44",border:"1px solid #6366f133",display:"inline-block",width:10,height:10}}></span> Očekáváno</span>
+                    </div>
+                  </div>
+
+                  {/* Upcoming dividends table */}
+                  <div style={S.card}>
+                    <div style={S.sectionTitle}>Nadcházející výplaty</div>
+                    <table style={S.table}>
+                      <thead><tr>{["Ticker","Datum","Dividenda/ks","Vaše ks","Odhadovaná výplata CZK",""].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {dividends.sort((a,b)=>new Date(a.date)-new Date(b.date)).map((d,i)=>{
+                          const pos=portfolio.positions.find(p=>p.ticker===d.ticker);
+                          const totalEst=pos&&d.perShare?toCZK(d.amount*pos.totalQty,d.currency,rates):null;
+                          return(
+                            <tr key={i}>
+                              <td style={{...S.td,fontWeight:600,color:"#f1f5f9"}}>{d.ticker}</td>
+                              <td style={S.td}>{fmtDate(d.date)}</td>
+                              <td style={{...S.td,color:"#8b5cf6"}}>{d.amount} {d.currency}</td>
+                              <td style={S.td}>{pos?pos.totalQty.toFixed(2):"–"}</td>
+                              <td style={{...S.td,fontWeight:600,color:"#8b5cf6"}}>{totalEst?fmt(totalEst,"CZK",0):"–"}</td>
+                              <td style={S.td}><button style={{...S.btn("danger"),padding:"3px 8px"}} onClick={()=>setDividends(prev=>prev.filter((_,j)=>j!==i))}>✕</button></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    <div style={{marginTop:14,display:"flex",gap:8,flexWrap:"wrap"}}>
+                      {[{label:"Ticker",id:"div_t",ph:"AAPL",type:"text"},{label:"Datum",id:"div_d",ph:"",type:"date"},{label:"Částka/ks",id:"div_a",ph:"0.25",type:"number"},{label:"Měna",id:"div_c",ph:"",type:"select",opts:["USD","EUR","CZK"]}].map(f=>(
+                        <div key={f.id} style={{flex:1,minWidth:90}}>
+                          <div style={{fontSize:10,color:"#475569",marginBottom:4}}>{f.label}</div>
+                          {f.type==="select"?<select id={f.id} style={S.select}>{f.opts.map(o=><option key={o}>{o}</option>)}</select>:<input id={f.id} type={f.type} placeholder={f.ph} style={S.input}/>}
+                        </div>
+                      ))}
+                      <div style={{display:"flex",alignItems:"flex-end"}}>
+                        <button style={S.btn("primary")} onClick={()=>{
+                          const t=document.getElementById("div_t").value,d=document.getElementById("div_d").value,a=parseFloat(document.getElementById("div_a").value),c=document.getElementById("div_c").value;
+                          if(!t||!d||isNaN(a)) return;
+                          setDividends(prev=>[...prev,{ticker:t.toUpperCase(),date:d,amount:a,perShare:true,currency:c}]);
+                        }}>Přidat</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Earnings */}
+                  <div style={S.card}>
+                    <div style={S.sectionTitle}>📊 Earnings kalendář</div>
+                    <table style={S.table}>
+                      <thead><tr>{["Ticker","Datum","Čas","Odhad EPS",""].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {earnings.sort((a,b)=>new Date(a.date)-new Date(b.date)).map((e,i)=>(
+                          <tr key={i}>
+                            <td style={{...S.td,fontWeight:600}}>{e.ticker}</td>
+                            <td style={S.td}>{fmtDate(e.date)}</td>
+                            <td style={S.td}>{e.time==="after-close"?"Po zavření":"Před otevřením"}</td>
+                            <td style={{...S.td,color:"#f59e0b"}}>{e.estimate}</td>
+                            <td style={S.td}><button style={{...S.btn("danger"),padding:"3px 8px"}} onClick={()=>setEarnings(prev=>prev.filter((_,j)=>j!==i))}>✕</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div style={{marginTop:10,display:"flex",gap:8,flexWrap:"wrap"}}>
+                      {[{label:"Ticker",id:"e_t",ph:"MSFT",type:"text"},{label:"Datum",id:"e_d",ph:"",type:"date"},{label:"Odhad EPS",id:"e_e",ph:"1.42 EPS",type:"text"}].map(f=>(
+                        <div key={f.id} style={{flex:1,minWidth:100}}>
+                          <div style={{fontSize:10,color:"#475569",marginBottom:4}}>{f.label}</div>
+                          <input id={f.id} type={f.type} placeholder={f.ph} style={S.input}/>
+                        </div>
+                      ))}
+                      <div style={{display:"flex",alignItems:"flex-end"}}>
+                        <button style={S.btn("primary")} onClick={()=>{
+                          const t=document.getElementById("e_t").value,d=document.getElementById("e_d").value,e=document.getElementById("e_e").value;
+                          if(!t||!d) return;
+                          setEarnings(prev=>[...prev,{ticker:t.toUpperCase(),date:d,time:"after-close",estimate:e}]);
+                        }}>Přidat</button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+          </>
+        )}
+
+        {/* ─── NOVINKY ────────────────────────────────────────────────────── */}
+        {tab === "novinky" && <NewsTab portfolio={portfolio} S={S} />}
 
         {/* ─── ANALÝZA ───────────────────────────────────────────────────── */}
         {tab === "analyza" && (
@@ -1626,12 +2023,43 @@ export default function App() {
             </div>
             <div style={S.card}>
               <div style={S.sectionTitle}>Záloha a reset</div>
-              <div style={{ display:"flex", gap:12 }}>
-                <button style={{ ...S.btn("danger"), border:"1px solid #dc2626" }} onClick={() => { if(window.confirm("Opravdu smazat všechny transakce?")) setTransactions([]); }}>Smazat transakce</button>
+              <div style={{ fontSize:11, color:"#475569", marginBottom:12 }}>
+                Data se automaticky ukládají do localStorage prohlížeče — přežijí refresh i zavření okna. Pro přenos mezi zařízeními použij export/import JSON.
+              </div>
+              <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
                 <button style={S.btn("outline")} onClick={() => {
                   const data = JSON.stringify({transactions,prices,rates,dividends,earnings,fiSettings},null,2);
                   const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([data],{type:"application/json"})); a.download="investtrack-backup.json"; a.click();
-                }}>📥 Exportovat JSON</button>
+                }}>📤 Exportovat zálohu JSON</button>
+                <button style={S.btn("outline")} onClick={() => {
+                  const input = document.createElement("input");
+                  input.type = "file"; input.accept = ".json";
+                  input.onchange = (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                      try {
+                        const d = JSON.parse(ev.target.result);
+                        if (d.transactions) setTransactions(d.transactions);
+                        if (d.prices) setPrices(d.prices);
+                        if (d.rates) setRates(d.rates);
+                        if (d.dividends) setDividends(d.dividends);
+                        if (d.earnings) setEarnings(d.earnings);
+                        if (d.fiSettings) setFiSettings(d.fiSettings);
+                        alert("✅ Záloha úspěšně obnovena!");
+                      } catch { alert("❌ Chyba při načítání souboru."); }
+                    };
+                    reader.readAsText(file);
+                  };
+                  input.click();
+                }}>📥 Importovat zálohu JSON</button>
+                <button style={{ ...S.btn("danger"), border:"1px solid #dc2626" }} onClick={() => {
+                  if(window.confirm("Opravdu smazat VŠECHNA data? Tato akce je nevratná.")) {
+                    setTransactions([]);
+                    localStorage.clear();
+                  }
+                }}>🗑 Smazat vše</button>
               </div>
             </div>
           </>
@@ -1660,17 +2088,24 @@ export default function App() {
             </div>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
               {[
-                {label:"Typ",key:"type",type:"select",opts:[["buy","Nákup"],["sell","Prodej"],["dividend","Dividenda"]]},
+                {label:"Typ",key:"type",type:"select",opts:[["buy","Nákup"],["sell","Prodej"],["dividend","Dividenda"],["deposit","Vklad"],["withdraw","Výběr"]]},
                 {label:"Kategorie",key:"category",type:"select",opts:[["stock","Akcie"],["etf","ETF"],["crypto","Crypto"]]},
-                {label:"Ticker",key:"ticker",type:"text",placeholder:"AAPL"},
-                {label:"Název",key:"name",type:"text",placeholder:"Apple Inc."},
+                ...(newTx.type!=="deposit"&&newTx.type!=="withdraw"?[
+                  {label:"Ticker",key:"ticker",type:"text",placeholder:"AAPL"},
+                  {label:"Název",key:"name",type:"text",placeholder:"Apple Inc."},
+                ]:[]),
                 {label:"Datum",key:"date",type:"date"},
                 {label:"Měna",key:"currency",type:"select",opts:[["USD","USD"],["EUR","EUR"],["CZK","CZK"]]},
-                ...(newTx.type!=="dividend"?[
+                ...(newTx.type==="deposit"||newTx.type==="withdraw"?[
+                  {label:"Částka",key:"amount",type:"number",placeholder:"10000"},
+                  {label:"Poplatek",key:"fee",type:"number",placeholder:"0"},
+                ]:newTx.type==="dividend"?[
+                  {label:"Částka dividendy",key:"dividendAmount",type:"number",placeholder:"25.00"},
+                ]:[
                   {label:"Množství",key:"quantity",type:"number",placeholder:"10"},
                   {label:"Cena/ks",key:"price",type:"number",placeholder:"150.00"},
                   {label:"Poplatek",key:"fee",type:"number",placeholder:"1.5"},
-                ]:[{label:"Částka dividendy",key:"dividendAmount",type:"number",placeholder:"25.00"}]),
+                ]),
                 {label:"Poznámka",key:"notes",type:"text",placeholder:"Volitelné",span:true},
               ].map(f => (
                 <div key={f.key} style={f.span?{gridColumn:"1/-1"}:{}}>
