@@ -1157,6 +1157,575 @@ function NewsTab({ portfolio, S }) {
   );
 }
 
+
+// ─── MINI SVG LINE/BAR CHART ─────────────────────────────────────────────────
+const MiniChart = ({ data, type="bar", color="#6366f1", label="", unit="", height=100 }) => {
+  if (!data || data.length < 2) return <div style={{color:"#334155",fontSize:11,padding:20,textAlign:"center"}}>Nedostatek dat</div>;
+  const vals = data.map(d => d.value);
+  const min = Math.min(...vals); const max = Math.max(...vals);
+  const range = max - min || 1;
+  const w = 420, h = height, pad = { t:8, b:28, l:52, r:8 };
+  const iW = w-pad.l-pad.r, iH = h-pad.t-pad.b;
+  const xS = i => pad.l + (i/(data.length-1))*iW;
+  const yS = v => pad.t + iH - ((v-min)/range)*iH;
+  const barW = Math.max(4, iW/data.length - 4);
+
+  const fmtV = v => {
+    const abs = Math.abs(v);
+    if (abs >= 1e9) return (v/1e9).toFixed(1)+"B";
+    if (abs >= 1e6) return (v/1e6).toFixed(1)+"M";
+    if (abs >= 1e3) return (v/1e3).toFixed(1)+"K";
+    return v.toFixed(1);
+  };
+
+  return (
+    <div style={{overflowX:"auto"}}>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",minWidth:260,height:"auto"}}>
+        <defs>
+          <linearGradient id={`g_${label}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.3"/>
+            <stop offset="100%" stopColor={color} stopOpacity="0"/>
+          </linearGradient>
+        </defs>
+        {/* Grid */}
+        {[0,0.25,0.5,0.75,1].map(t=>(
+          <g key={t}>
+            <line x1={pad.l} y1={pad.t+iH*t} x2={w-pad.r} y2={pad.t+iH*t} stroke="#1e293b" strokeWidth="1"/>
+            <text x={pad.l-4} y={pad.t+iH*t+4} textAnchor="end" fill="#475569" fontSize="8">
+              {fmtV(max-(range*t))}{unit}
+            </text>
+          </g>
+        ))}
+        {/* Zero line */}
+        {min < 0 && max > 0 && (
+          <line x1={pad.l} y1={yS(0)} x2={w-pad.r} y2={yS(0)} stroke="#334155" strokeWidth="1.5" strokeDasharray="3,2"/>
+        )}
+        {type === "bar" && data.map((d,i) => {
+          const bx = pad.l + (i/data.length)*iW + (iW/data.length - barW)/2;
+          const isPos = d.value >= 0;
+          const barH = Math.abs((d.value-0)/range * iH);
+          const by = isPos ? yS(d.value) : yS(0);
+          const c = d.value >= 0 ? color : "#ef4444";
+          return (
+            <g key={i}>
+              <rect x={bx} y={by} width={barW} height={Math.max(1,barH)} fill={c} opacity={0.85} rx={2}/>
+              <text x={bx+barW/2} y={h-4} textAnchor="middle" fill="#475569" fontSize="8">{d.label}</text>
+            </g>
+          );
+        })}
+        {type === "line" && (
+          <>
+            <path d={data.map((d,i)=>`${i===0?"M":"L"}${xS(i)},${yS(d.value)}`).join(" ")+
+              ` L${xS(data.length-1)},${pad.t+iH} L${xS(0)},${pad.t+iH} Z`}
+              fill={`url(#g_${label})`}/>
+            <path d={data.map((d,i)=>`${i===0?"M":"L"}${xS(i)},${yS(d.value)}`).join(" ")}
+              fill="none" stroke={color} strokeWidth="2"/>
+            {data.map((d,i)=>(
+              <g key={i}>
+                <circle cx={xS(i)} cy={yS(d.value)} r="3" fill={color}/>
+                <text x={xS(i)} y={h-4} textAnchor="middle" fill="#475569" fontSize="8">{d.label}</text>
+              </g>
+            ))}
+          </>
+        )}
+        {type === "combo" && (
+          <>
+            {data.map((d,i) => {
+              const bx = pad.l + (i/data.length)*iW + (iW/data.length - barW)/2;
+              return <rect key={i} x={bx} y={yS(Math.max(d.value,0))} width={barW} height={Math.max(1,Math.abs(yS(0)-yS(d.value)))} fill={d.value>=0?color+"66":"#ef444466"} rx={2}/>;
+            })}
+            {data.map((d,i)=>(
+              <text key={i} x={pad.l+(i/data.length)*iW+(iW/data.length)/2} y={h-4} textAnchor="middle" fill="#475569" fontSize="8">{d.label}</text>
+            ))}
+          </>
+        )}
+      </svg>
+    </div>
+  );
+};
+
+// ─── FUNDAMENTAL CHARTS COMPONENT ────────────────────────────────────────────
+const FundamentalCharts = ({ S }) => {
+  const [ticker, setTicker] = useState("AAPL");
+  const [inputTicker, setInputTicker] = useState("AAPL");
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [activeChart, setActiveChart] = useState("overview");
+
+  const fetchFundamentals = async (t) => {
+    setLoading(true); setError(""); setData(null);
+    try {
+      // Volá Vercel serverless proxy (api/claude.js) — skryje API klíč
+      const resp = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 2000,
+          messages: [{
+            role: "user",
+            content: `Pro akciový ticker ${t.toUpperCase()} vrať fundamentální finanční data za posledních 8-10 let jako JSON objekt BEZ jakéhokoliv textu, pouze čistý JSON.
+
+Struktura:
+{
+  "ticker": "${t.toUpperCase()}",
+  "name": "celý název společnosti",
+  "sector": "sektor",
+  "currency": "USD",
+  "currentPrice": číslo,
+  "marketCap": číslo v miliardách,
+  "years": ["2016","2017","2018","2019","2020","2021","2022","2023","2024"],
+  "revenue": [čísla v miliardách USD],
+  "netIncome": [čísla v miliardách USD],
+  "ebitda": [čísla v miliardách USD],
+  "freeCashFlow": [čísla v miliardách USD],
+  "eps": [čísla],
+  "dividendPerShare": [čísla, 0 pokud neplatí],
+  "peRatio": [čísla, null pokud záporné EPS],
+  "totalDebt": [čísla v miliardách USD],
+  "cashAndEquivalents": [čísla v miliardách USD],
+  "sharesOutstanding": [čísla v miliardách],
+  "roe": [procenta],
+  "grossMargin": [procenta],
+  "operatingMargin": [procenta],
+  "netMargin": [procenta],
+  "summary": "2-3 věty o fundamentální kvalitě společnosti"
+}
+
+Použij skutečná historická data. Pokud ticker neexistuje, vrať {"error": "Ticker nenalezen"}.`
+          }]
+        })
+      });
+      const json = await resp.json();
+      const text = json.content?.[0]?.text || "";
+      const cleaned = text.replace(/```json|```/g,"").trim();
+      const parsed = JSON.parse(cleaned);
+      if (parsed.error) { setError(parsed.error); setLoading(false); return; }
+      setData(parsed);
+      setTicker(t.toUpperCase());
+    } catch(e) {
+      setError("Chyba při načítání dat: " + e.message);
+    }
+    setLoading(false);
+  };
+
+  const mkData = (key) => !data ? [] : (data.years||[]).map((y,i) => ({
+    label: y.toString().slice(2),
+    value: (data[key]||[])[i] ?? null
+  })).filter(d => d.value !== null);
+
+  const CHARTS = [
+    { id:"overview", label:"Přehled" },
+    { id:"revenue", label:"Revenue & Marže" },
+    { id:"profit", label:"Ziskovost" },
+    { id:"cashflow", label:"Free Cash Flow" },
+    { id:"dividends", label:"Dividendy" },
+    { id:"debt", label:"Dluh & Hotovost" },
+    { id:"shares", label:"Počet akcií" },
+    { id:"valuation", label:"Valuace" },
+    { id:"margins", label:"Marže" },
+  ];
+
+  const StatRow = ({label, value, color="#94a3b8"}) => (
+    <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid #0f172a",fontSize:11}}>
+      <span style={{color:"#475569"}}>{label}</span>
+      <span style={{color,fontWeight:600}}>{value}</span>
+    </div>
+  );
+
+  const ChartCard = ({title, children, desc}) => (
+    <div style={{background:"#0a0f1e",border:"1px solid #1e293b",borderRadius:8,padding:16,marginBottom:12}}>
+      <div style={{fontSize:11,fontWeight:700,color:"#94a3b8",letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:4}}>{title}</div>
+      {desc && <div style={{fontSize:10,color:"#334155",marginBottom:10}}>{desc}</div>}
+      {children}
+    </div>
+  );
+
+  const upC = v => v >= 0 ? "#10b981" : "#ef4444";
+
+  return (
+    <div>
+      {/* Ticker search */}
+      <div style={{display:"flex",gap:10,marginBottom:20,alignItems:"flex-end",flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:140}}>
+          <div style={{fontSize:10,color:"#475569",marginBottom:5}}>Ticker akcie / ETF</div>
+          <input value={inputTicker} onChange={e=>setInputTicker(e.target.value.toUpperCase())}
+            onKeyDown={e=>e.key==="Enter"&&fetchFundamentals(inputTicker)}
+            placeholder="AAPL, MSFT, NVDA..." style={S.input}/>
+        </div>
+        <button style={{...S.btn("primary"),padding:"9px 24px",fontSize:12}}
+          onClick={()=>fetchFundamentals(inputTicker)} disabled={loading}>
+          {loading?"⟳ Načítám...":"📊 Načíst grafy"}
+        </button>
+        {/* Quick tickers */}
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {["AAPL","MSFT","NVDA","JNJ","KO","O"].map(t=>(
+            <button key={t} style={{...S.btn("outline"),padding:"6px 10px",fontSize:10,
+              border:ticker===t?"1px solid #6366f1":"1px solid #334155",
+              color:ticker===t?"#6366f1":"#64748b"}}
+              onClick={()=>{setInputTicker(t);fetchFundamentals(t);}}>
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && <div style={{color:"#ef4444",background:"#ef444411",border:"1px solid #ef444433",borderRadius:6,padding:"10px 14px",marginBottom:14,fontSize:12}}>⚠ {error}</div>}
+
+      {loading && (
+        <div style={{textAlign:"center",padding:60}}>
+          <div style={{fontSize:32,marginBottom:12}}>⟳</div>
+          <div style={{color:"#6366f1",fontSize:13,fontWeight:600}}>Načítám fundamentální data pro {inputTicker}...</div>
+          <div style={{color:"#475569",fontSize:11,marginTop:6}}>AI analyzuje historická data posledních 10 let</div>
+        </div>
+      )}
+
+      {data && !loading && (
+        <>
+          {/* Header */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:10}}>
+            <div>
+              <div style={{fontSize:18,fontWeight:700,color:"#f1f5f9"}}>{data.ticker} — {data.name}</div>
+              <div style={{fontSize:11,color:"#475569",marginTop:2}}>{data.sector} · {data.currency} · Tržní cap: <b style={{color:"#94a3b8"}}>{data.marketCap?.toFixed(1)}B</b></div>
+              {data.summary && <div style={{fontSize:11,color:"#64748b",marginTop:6,maxWidth:600,lineHeight:1.5,fontStyle:"italic"}}>"{data.summary}"</div>}
+            </div>
+            <div style={{fontSize:22,fontWeight:800,color:"#6366f1"}}>{data.currentPrice} {data.currency}</div>
+          </div>
+
+          {/* Chart tabs */}
+          <div style={{display:"flex",gap:4,marginBottom:16,flexWrap:"wrap"}}>
+            {CHARTS.map(c=>(
+              <button key={c.id} style={{...S.btn(activeChart===c.id?"primary":"outline"),padding:"5px 12px",fontSize:10}}
+                onClick={()=>setActiveChart(c.id)}>{c.label}</button>
+            ))}
+          </div>
+
+          {/* OVERVIEW */}
+          {activeChart==="overview" && (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <div>
+                <ChartCard title="Revenue (mld.)" desc="Roční tržby v miliardách USD">
+                  <MiniChart data={mkData("revenue")} type="bar" color="#6366f1" label="rev"/>
+                </ChartCard>
+                <ChartCard title="Free Cash Flow (mld.)" desc="Volný peněžní tok — klíčový ukazatel zdraví firmy">
+                  <MiniChart data={mkData("freeCashFlow")} type="bar" color="#10b981" label="fcf"/>
+                </ChartCard>
+              </div>
+              <div>
+                <ChartCard title="EPS (zisk na akcii)" desc="Earnings Per Share v USD">
+                  <MiniChart data={mkData("eps")} type="line" color="#f59e0b" label="eps"/>
+                </ChartCard>
+                <ChartCard title="Klíčové ukazatele">
+                  {data.years?.slice(-1).map(()=>(
+                    <div key="k">
+                      {[
+                        ["Revenue (TTM)", `${data.revenue?.slice(-1)[0]?.toFixed(1)}B ${data.currency}","#f1f5f9`],
+                        ["Net Income (TTM)", `${data.netIncome?.slice(-1)[0]?.toFixed(1)}B`, upC(data.netIncome?.slice(-1)[0]||0)],
+                        ["FCF (TTM)", `${data.freeCashFlow?.slice(-1)[0]?.toFixed(1)}B`, upC(data.freeCashFlow?.slice(-1)[0]||0)],
+                        ["EPS (TTM)", `${data.eps?.slice(-1)[0]?.toFixed(2)} ${data.currency}`, upC(data.eps?.slice(-1)[0]||0)],
+                        ["P/E ratio", data.peRatio?.slice(-1)[0]?.toFixed(1)||"N/A", "#94a3b8"],
+                        ["EBITDA (TTM)", `${data.ebitda?.slice(-1)[0]?.toFixed(1)}B`, "#94a3b8"],
+                        ["Dividenda/akcie", `${data.dividendPerShare?.slice(-1)[0]?.toFixed(2)||"0"} ${data.currency}`, "#8b5cf6"],
+                        ["Čistá marže", `${data.netMargin?.slice(-1)[0]?.toFixed(1)||"N/A"}%`, "#10b981"],
+                        ["ROE", `${data.roe?.slice(-1)[0]?.toFixed(1)||"N/A"}%`, upC(data.roe?.slice(-1)[0]||0)],
+                        ["Celkový dluh", `${data.totalDebt?.slice(-1)[0]?.toFixed(1)||"N/A"}B`, "#ef4444"],
+                        ["Hotovost", `${data.cashAndEquivalents?.slice(-1)[0]?.toFixed(1)||"N/A"}B`, "#10b981"],
+                        ["Čistý dluh", `${((data.totalDebt?.slice(-1)[0]||0)-(data.cashAndEquivalents?.slice(-1)[0]||0)).toFixed(1)}B`, "#94a3b8"],
+                      ].map(([l,v,c],i)=><StatRow key={i} label={l} value={v} color={c||"#94a3b8"}/>)}
+                    </div>
+                  ))}
+                </ChartCard>
+              </div>
+            </div>
+          )}
+
+          {/* REVENUE & MARŽE */}
+          {activeChart==="revenue" && (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <ChartCard title="Revenue — tržby (mld. USD)" desc="Celkové roční tržby">
+                <MiniChart data={mkData("revenue")} type="bar" color="#6366f1" label="rv" height={120}/>
+              </ChartCard>
+              <ChartCard title="EBITDA (mld. USD)" desc="Zisk před úroky, daněmi, odpisy a amortizací">
+                <MiniChart data={mkData("ebitda")} type="bar" color="#3b82f6" label="eb" height={120}/>
+              </ChartCard>
+              <ChartCard title="Net Income — čistý zisk (mld. USD)" desc="Zisk po zdanění">
+                <MiniChart data={mkData("netIncome")} type="combo" color="#10b981" label="ni" height={120}/>
+              </ChartCard>
+              <ChartCard title="Hrubá marže (%)" desc="Gross Margin — efektivita výroby/prodeje">
+                <MiniChart data={mkData("grossMargin")} type="line" color="#f59e0b" label="gm" unit="%" height={120}/>
+              </ChartCard>
+            </div>
+          )}
+
+          {/* ZISKOVOST */}
+          {activeChart==="profit" && (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <ChartCard title="EPS — zisk na akcii (USD)" desc="Earnings Per Share — klíčový ukazatel růstu">
+                <MiniChart data={mkData("eps")} type="combo" color="#f59e0b" label="eps" height={130}/>
+              </ChartCard>
+              <ChartCard title="ROE — výnosnost vlastního kapitálu (%)" desc="Return on Equity — Buffett požaduje > 15%">
+                <MiniChart data={mkData("roe")} type="line" color="#8b5cf6" label="roe" unit="%" height={130}/>
+              </ChartCard>
+              <ChartCard title="Provozní marže (%)" desc="Operating Margin — zisk z core businessu">
+                <MiniChart data={mkData("operatingMargin")} type="line" color="#6366f1" label="om" unit="%" height={130}/>
+              </ChartCard>
+              <ChartCard title="Čistá marže (%)" desc="Net Margin — kolik centů ze $1 tržeb zůstane">
+                <MiniChart data={mkData("netMargin")} type="line" color="#10b981" label="nm" unit="%" height={130}/>
+              </ChartCard>
+            </div>
+          )}
+
+          {/* FREE CASH FLOW */}
+          {activeChart==="cashflow" && (
+            <div>
+              <ChartCard title="Free Cash Flow (mld. USD)" desc="Volný peněžní tok — peníze které firma skutečně generuje po investicích. Nejdůležitější ukazatel pro DCF ocenění.">
+                <MiniChart data={mkData("freeCashFlow")} type="combo" color="#10b981" label="fcf" height={150}/>
+              </ChartCard>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <ChartCard title="FCF vs Net Income porovnání" desc="Ideálně by FCF měl být blízký nebo vyšší než Net Income">
+                  <div style={{overflowX:"auto"}}>
+                    <svg viewBox="0 0 420 120" style={{width:"100%",minWidth:260,height:"auto"}}>
+                      {(data.years||[]).map((y,i)=>{
+                        const n=data.netIncome?.[i]||0, f=data.freeCashFlow?.[i]||0;
+                        const maxV=Math.max(...(data.netIncome||[]).concat(data.freeCashFlow||[]).map(Math.abs),1);
+                        const bW=18, gap=42, x=20+i*gap;
+                        const hN=Math.abs(n)/maxV*80, hF=Math.abs(f)/maxV*80;
+                        return(
+                          <g key={i}>
+                            <rect x={x} y={90-hN} width={bW} height={hN} fill={n>=0?"#6366f166":"#ef444466"} rx={2}/>
+                            <rect x={x+bW+2} y={90-hF} width={bW} height={hF} fill={f>=0?"#10b98166":"#ef444466"} rx={2}/>
+                            <text x={x+bW} y={110} textAnchor="middle" fill="#475569" fontSize="7">{y.toString().slice(2)}</text>
+                          </g>
+                        );
+                      })}
+                      <line x1={20} y1={90} x2={400} y2={90} stroke="#334155" strokeWidth="1"/>
+                      <text x={10} y={10} fill="#6366f1" fontSize="8">■ Net Income</text>
+                      <text x={90} y={10} fill="#10b981" fontSize="8">■ FCF</text>
+                    </svg>
+                  </div>
+                </ChartCard>
+                <ChartCard title="FCF Yield (%)" desc="FCF / Tržní cap — čím vyšší, tím levnější akcie">
+                  <MiniChart data={(data.years||[]).map((y,i)=>({
+                    label:y.toString().slice(2),
+                    value: data.marketCap&&data.freeCashFlow?.[i]
+                      ? (data.freeCashFlow[i]/data.marketCap)*100 : null
+                  })).filter(d=>d.value!==null)} type="line" color="#f59e0b" label="fcfy" unit="%" height={120}/>
+                </ChartCard>
+              </div>
+            </div>
+          )}
+
+          {/* DIVIDENDY */}
+          {activeChart==="dividends" && (
+            <div>
+              <ChartCard title="Dividenda na akcii (USD/rok)" desc="Roční dividenda na akcii — sleduj konzistentní růst (Dividend Aristocrats)">
+                <MiniChart data={mkData("dividendPerShare")} type="bar" color="#8b5cf6" label="div" height={140}/>
+              </ChartCard>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <ChartCard title="Dividend Payout Ratio (%)" desc="Kolik % zisku (EPS) firma vyplácí jako dividendu. Udržitelné: 30-70%">
+                  <MiniChart data={(data.years||[]).map((y,i)=>({
+                    label:y.toString().slice(2),
+                    value: data.eps?.[i]&&data.eps[i]>0&&data.dividendPerShare?.[i]
+                      ? (data.dividendPerShare[i]/data.eps[i])*100 : null
+                  })).filter(d=>d.value!==null)} type="line" color="#ec4899" label="pr" unit="%" height={120}/>
+                </ChartCard>
+                <ChartCard title="Roční růst dividendy (%)" desc="Dividend Growth Rate — čím vyšší a konzistentnější, tím lepší">
+                  <MiniChart data={(data.years||[]).map((y,i)=>({
+                    label:y.toString().slice(2),
+                    value: i>0&&data.dividendPerShare?.[i-1]>0
+                      ? ((data.dividendPerShare[i]-data.dividendPerShare[i-1])/data.dividendPerShare[i-1])*100 : null
+                  })).filter(d=>d.value!==null)} type="combo" color="#10b981" label="dgr" unit="%" height={120}/>
+                </ChartCard>
+              </div>
+            </div>
+          )}
+
+          {/* DLUH */}
+          {activeChart==="debt" && (
+            <div>
+              <ChartCard title="Celkový dluh vs. Hotovost (mld. USD)" desc="Červená = dluh, zelená = hotovost. Ideálně hotovost > dluh nebo Net Debt klesá">
+                <div style={{overflowX:"auto"}}>
+                  <svg viewBox="0 0 420 140" style={{width:"100%",minWidth:260,height:"auto"}}>
+                    {(data.years||[]).map((y,i)=>{
+                      const d=data.totalDebt?.[i]||0, c=data.cashAndEquivalents?.[i]||0;
+                      const maxV=Math.max(...(data.totalDebt||[]).concat(data.cashAndEquivalents||[]),1);
+                      const bW=18, gap=Math.min(50,380/(data.years?.length||1)), x=20+i*gap;
+                      const hD=d/maxV*100, hC=c/maxV*100;
+                      return(
+                        <g key={i}>
+                          <rect x={x} y={110-hD} width={bW} height={hD} fill="#ef444477" rx={2}/>
+                          <rect x={x+bW+2} y={110-hC} width={bW} height={hC} fill="#10b98177" rx={2}/>
+                          <text x={x+bW} y={128} textAnchor="middle" fill="#475569" fontSize="7">{y.toString().slice(2)}</text>
+                        </g>
+                      );
+                    })}
+                    <text x={15} y={12} fill="#ef4444" fontSize="9">■ Dluh</text>
+                    <text x={65} y={12} fill="#10b981" fontSize="9">■ Hotovost</text>
+                  </svg>
+                </div>
+              </ChartCard>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <ChartCard title="Net Debt (mld. USD)" desc="Čistý dluh = Celkový dluh − Hotovost. Záporný = více hotovosti než dluhu">
+                  <MiniChart data={(data.years||[]).map((y,i)=>({
+                    label:y.toString().slice(2),
+                    value:(data.totalDebt?.[i]||0)-(data.cashAndEquivalents?.[i]||0)
+                  }))} type="combo" color="#f59e0b" label="nd" height={120}/>
+                </ChartCard>
+                <ChartCard title="Debt/EBITDA poměr" desc="Počet let na splacení dluhu z EBITDA. Ideálně < 3x">
+                  <MiniChart data={(data.years||[]).map((y,i)=>({
+                    label:y.toString().slice(2),
+                    value:data.ebitda?.[i]>0?((data.totalDebt?.[i]||0)/data.ebitda[i]):null
+                  })).filter(d=>d.value!==null)} type="line" color="#ef4444" label="de" unit="x" height={120}/>
+                </ChartCard>
+              </div>
+            </div>
+          )}
+
+          {/* POČET AKCIÍ */}
+          {activeChart==="shares" && (
+            <div>
+              <ChartCard title="Počet akcií v oběhu (mld.)" desc="Klesající počet = buyback (firma vykupuje vlastní akcie = pozitivní pro akcionáře). Rostoucí = ředění (dilution = negativní).">
+                <MiniChart data={mkData("sharesOutstanding")} type="combo" color="#6366f1" label="sh" height={150}/>
+              </ChartCard>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <ChartCard title="Roční změna počtu akcií (%)" desc="Záporné = buyback (dobré), kladné = dilution (pozor!)">
+                  <MiniChart data={(data.years||[]).map((y,i)=>({
+                    label:y.toString().slice(2),
+                    value:i>0&&data.sharesOutstanding?.[i-1]>0
+                      ?((data.sharesOutstanding[i]-data.sharesOutstanding[i-1])/data.sharesOutstanding[i-1])*100:null
+                  })).filter(d=>d.value!==null)} type="combo" color="#10b981" label="sc" unit="%" height={120}/>
+                </ChartCard>
+                <ChartCard title="EPS růst — vliv buybacků" desc="Buybacky zvyšují EPS i bez růstu tržeb — sleduj zda roste EPS rychleji než Net Income">
+                  <MiniChart data={(data.years||[]).map((y,i)=>({
+                    label:y.toString().slice(2),
+                    value:i>0&&data.eps?.[i-1]>0?((data.eps[i]-data.eps[i-1])/data.eps[i-1])*100:null
+                  })).filter(d=>d.value!==null)} type="combo" color="#f59e0b" label="eg" unit="%" height={120}/>
+                </ChartCard>
+              </div>
+            </div>
+          )}
+
+          {/* VALUACE */}
+          {activeChart==="valuation" && (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <ChartCard title="P/E ratio" desc="Price/Earnings — valuační násobek. Vysoký P/E = trh očekává růst nebo je akcie drahá">
+                <MiniChart data={mkData("peRatio")} type="line" color="#f59e0b" label="pe" height={130}/>
+              </ChartCard>
+              <ChartCard title="Price/FCF (Tržní cap / FCF)" desc="Levnější alternativa k P/E — ukazuje kolik platíš za $1 volného cash flow">
+                <MiniChart data={(data.years||[]).map((y,i)=>({
+                  label:y.toString().slice(2),
+                  value:data.freeCashFlow?.[i]>0?(data.marketCap/data.freeCashFlow[i]):null
+                })).filter(d=>d.value!==null)} type="line" color="#6366f1" label="pf" height={130}/>
+              </ChartCard>
+              <ChartCard title="Revenue na akcii (USD)" desc="Tržby na akcii — roste díky organickému růstu i buybackům">
+                <MiniChart data={(data.years||[]).map((y,i)=>({
+                  label:y.toString().slice(2),
+                  value:data.sharesOutstanding?.[i]>0?(data.revenue?.[i]/data.sharesOutstanding[i]):null
+                })).filter(d=>d.value!==null)} type="line" color="#10b981" label="rs" height={130}/>
+              </ChartCard>
+              <ChartCard title="EBITDA marže (%)" desc="EBITDA / Revenue — provozní výkonnost před finančními náklady">
+                <MiniChart data={(data.years||[]).map((y,i)=>({
+                  label:y.toString().slice(2),
+                  value:data.revenue?.[i]>0?(data.ebitda?.[i]/data.revenue[i])*100:null
+                })).filter(d=>d.value!==null)} type="line" color="#8b5cf6" label="em" unit="%" height={130}/>
+              </ChartCard>
+            </div>
+          )}
+
+          {/* MARŽE */}
+          {activeChart==="margins" && (
+            <div>
+              <ChartCard title="Vývoj marží v čase (%)" desc="Porovnání hrubé, provozní a čisté marže — sleduj trend a konzistenci">
+                <div style={{overflowX:"auto"}}>
+                  <svg viewBox="0 0 420 140" style={{width:"100%",minWidth:260,height:"auto"}}>
+                    <defs>
+                      {["#6366f1","#10b981","#f59e0b"].map((c,i)=>(
+                        <linearGradient key={i} id={`mg${i}`} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={c} stopOpacity="0.2"/>
+                          <stop offset="100%" stopColor={c} stopOpacity="0"/>
+                        </linearGradient>
+                      ))}
+                    </defs>
+                    {[["grossMargin","#6366f1",0],["operatingMargin","#10b981",1],["netMargin","#f59e0b",2]].map(([key,color,gi])=>{
+                      const vals=(data.years||[]).map((_,i)=>data[key]?.[i]||0);
+                      const maxM=Math.max(...(data.grossMargin||[]).concat(data.operatingMargin||[]).concat(data.netMargin||[]),1);
+                      const iW=380, iH=110, padL=30;
+                      const xS=i=>padL+(i/(vals.length-1))*iW;
+                      const yS=v=>10+iH-(v/maxM)*iH;
+                      const path=vals.map((v,i)=>`${i===0?"M":"L"}${xS(i)},${yS(v)}`).join(" ");
+                      return <path key={key} d={path} fill="none" stroke={color} strokeWidth="1.5" opacity={0.9}/>;
+                    })}
+                    {(data.years||[]).filter((_,i)=>i%2===0).map((y,_,arr)=>{
+                      const idx=data.years.indexOf(y);
+                      return <text key={y} x={30+(idx/(data.years.length-1))*380} y={135} textAnchor="middle" fill="#475569" fontSize="8">{y.toString().slice(2)}</text>;
+                    })}
+                    <text x={35} y={10} fill="#6366f1" fontSize="8">— Hrubá</text>
+                    <text x={95} y={10} fill="#10b981" fontSize="8">— Provozní</text>
+                    <text x={165} y={10} fill="#f59e0b" fontSize="8">— Čistá</text>
+                  </svg>
+                </div>
+              </ChartCard>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <ChartCard title="Hrubá marže (%)" desc="Gross Margin">
+                  <MiniChart data={mkData("grossMargin")} type="line" color="#6366f1" label="gm2" unit="%" height={110}/>
+                </ChartCard>
+                <ChartCard title="Čistá marže (%)" desc="Net Margin">
+                  <MiniChart data={mkData("netMargin")} type="line" color="#f59e0b" label="nm2" unit="%" height={110}/>
+                </ChartCard>
+              </div>
+            </div>
+          )}
+
+          <div style={{fontSize:10,color:"#1e293b",marginTop:16,padding:"8px 12px",background:"#0d1424",borderRadius:5,border:"1px solid #1e293b"}}>
+            ⚠ Data jsou generována AI a slouží pouze pro informační účely. Před investičním rozhodnutím ověř data z oficiálních zdrojů (SEC, výroční zprávy, Bloomberg).
+          </div>
+        </>
+      )}
+
+      {!data && !loading && !error && (
+        <div style={{textAlign:"center",padding:60,color:"#334155"}}>
+          <div style={{fontSize:40,marginBottom:12}}>📈</div>
+          <div style={{fontSize:13,color:"#475569",marginBottom:6}}>Zadej ticker a klikni na Načíst grafy</div>
+          <div style={{fontSize:11,color:"#334155"}}>AI načte historická fundamentální data za posledních 8-10 let</div>
+          <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap",marginTop:20}}>
+            <div style={{background:"#0d1424",border:"1px solid #1e293b",borderRadius:6,padding:"8px 14px",fontSize:11,color:"#475569"}}>📊 Revenue & EBITDA</div>
+            <div style={{background:"#0d1424",border:"1px solid #1e293b",borderRadius:6,padding:"8px 14px",fontSize:11,color:"#475569"}}>💸 Free Cash Flow</div>
+            <div style={{background:"#0d1424",border:"1px solid #1e293b",borderRadius:6,padding:"8px 14px",fontSize:11,color:"#475569"}}>📉 EPS & P/E</div>
+            <div style={{background:"#0d1424",border:"1px solid #1e293b",borderRadius:6,padding:"8px 14px",fontSize:11,color:"#475569"}}>🏦 Dluh & Hotovost</div>
+            <div style={{background:"#0d1424",border:"1px solid #1e293b",borderRadius:6,padding:"8px 14px",fontSize:11,color:"#475569"}}>🔄 Buybacky & Ředění</div>
+            <div style={{background:"#0d1424",border:"1px solid #1e293b",borderRadius:6,padding:"8px 14px",fontSize:11,color:"#475569"}}>💰 Dividendový růst</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+// ─── ANALYZA TAB WRAPPER ──────────────────────────────────────────────────────
+function AnalyzaTab({ rates, S }) {
+  const [subTab, setSubTab] = useState("fundamenty");
+  const SUB = [
+    { id:"fundamenty", label:"📈 Fundamentální grafy" },
+    { id:"oceneni", label:"🔍 Ocenění (DCF/Graham)" },
+  ];
+  return (
+    <>
+      <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:12 }}>Analýza akcií</div>
+      <div style={{ display:"flex", gap:6, marginBottom:20 }}>
+        {SUB.map(s=>(
+          <button key={s.id}
+            style={{ ...S.btn(subTab===s.id?"primary":"outline"), padding:"8px 18px" }}
+            onClick={()=>setSubTab(s.id)}>{s.label}</button>
+        ))}
+      </div>
+      {subTab==="fundamenty" && <FundamentalCharts S={S} />}
+      {subTab==="oceneni" && <ValuationAnalyzer rates={rates} />}
+    </>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   // ─── MULTI-PORTFOLIO STATE ─────────────────────────────────────────────
@@ -2251,11 +2820,7 @@ export default function App() {
 
         {/* ─── ANALÝZA ───────────────────────────────────────────────────── */}
         {tab === "analyza" && (
-          <>
-            <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:6 }}>🔍 Analýza & Ocenění akcií</div>
-            <div style={{ fontSize:11, color:"#475569", marginBottom:16 }}>DCF · Grahamova formule · Buffettův přístup · Technická analýza</div>
-            <ValuationAnalyzer rates={rates} />
-          </>
+          <AnalyzaTab rates={rates} S={S} />
         )}
 
         {/* ─── FI ────────────────────────────────────────────────────────── */}
