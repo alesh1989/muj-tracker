@@ -1,21 +1,36 @@
 // Vercel Serverless Function — Anthropic API proxy
 export const config = { runtime: "nodejs" };
- 
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
- 
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: "ANTHROPIC_API_KEY chybí v Environment Variables" });
- 
-  let body = req.body;
-  if (typeof body === "string") {
-    try { body = JSON.parse(body); } catch { return res.status(400).json({ error: "Invalid JSON" }); }
+  if (!apiKey) {
+    return res.status(500).json({ error: "ANTHROPIC_API_KEY není nastaven v Vercel Environment Variables" });
   }
- 
+
+  // Parse body — Vercel může dodat string nebo object
+  let body;
+  try {
+    if (typeof req.body === "string") {
+      body = JSON.parse(req.body);
+    } else if (req.body && typeof req.body === "object") {
+      body = req.body;
+    } else {
+      // Manually read raw body
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      body = JSON.parse(Buffer.concat(chunks).toString());
+    }
+  } catch (e) {
+    return res.status(400).json({ error: "Nepodařilo se parsovat tělo požadavku: " + e.message });
+  }
+
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -26,7 +41,15 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify(body),
     });
-    const data = await response.json();
+
+    const responseText = await response.text();
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      return res.status(500).json({ error: "Anthropic API vrátila neplatný JSON: " + responseText.slice(0, 200) });
+    }
+
     return res.status(response.status).json(data);
   } catch (err) {
     return res.status(500).json({ error: "Proxy chyba: " + err.message });

@@ -1300,12 +1300,24 @@ Použij skutečná historická data. Pokud ticker neexistuje, vrať {"error": "T
       if (!resp.ok) {
         let errMsg = `HTTP ${resp.status}`;
         try { const eb = await resp.json(); errMsg = eb.error || JSON.stringify(eb); } catch {}
-        setError(`API chyba: ${errMsg}`);
+        setError("API chyba: " + (typeof errMsg === "object" ? JSON.stringify(errMsg) : String(errMsg)));
         setLoading(false);
         return;
       }
       const json = await resp.json();
+      // Handle API-level errors
+      if (json.error) {
+        const apiErr = typeof json.error === "object" ? (json.error.message || JSON.stringify(json.error)) : String(json.error);
+        setError("API chyba: " + apiErr);
+        setLoading(false);
+        return;
+      }
       const text = json.content?.[0]?.text || "";
+      if (!text) {
+        setError("Prázdná odpověď od API. Zkontroluj ANTHROPIC_API_KEY na Vercelu.");
+        setLoading(false);
+        return;
+      }
       const cleaned = text.replace(/```json|```/g,"").trim();
       const parsed = JSON.parse(cleaned);
       if (parsed.error) { setError(parsed.error); setLoading(false); return; }
@@ -1850,6 +1862,10 @@ export default function App() {
     saveToCloud({ transactions, prices, rates, dividends, earnings, fiSettings, portfolios, activePortfolioId });
   }, [transactions, prices, rates, dividends, earnings, fiSettings, loaded]);
 
+  // Persist theme/fontSize locally (not synced to cloud)
+  useEffect(() => { try { localStorage.setItem("inv_darkMode", JSON.stringify(darkMode)); } catch {} }, [darkMode]);
+  useEffect(() => { try { localStorage.setItem("inv_fontSize", JSON.stringify(fontSize)); } catch {} }, [fontSize]);
+
   // Realtime sync — při změně z jiného zařízení se data obnoví
   useEffect(() => {
     if (!supabase || !loaded) return;
@@ -2061,7 +2077,6 @@ export default function App() {
       background: darkMode ? "#0a0f1e" : "#f1f5f9",
       color: darkMode ? "#e2e8f0" : "#1e293b",
       fontFamily:"'IBM Plex Mono','Courier New',monospace", fontSize },
-    // Light mode overrides applied via inline styles where needed
     nav: { background: darkMode ? "#0d1424" : "#ffffff", borderBottom: darkMode ? "1px solid #1e293b" : "1px solid #e2e8f0", position:"sticky", top:0, zIndex:100 },
     navTop: { padding:"0 20px", display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom: darkMode ? "1px solid #0f172a" : "1px solid #e2e8f0" },
     navTabs: { padding:"0 20px", display:"flex", alignItems:"center", gap:0, overflowX:"auto" },
@@ -2096,8 +2111,15 @@ export default function App() {
     </div>
   );
 
+  // Apply fontSize as CSS custom property for global scaling
+  const fontScale = fontSize / 13; // 13 is the base
+
   return (
-    <div style={S.app}>
+    <div style={{...S.app, "--font-scale": fontScale, "--base-font": fontSize + "px"}}>
+      <style>{`
+        :root { font-size: ${fontSize}px; }
+        * { font-family: 'IBM Plex Mono', 'Courier New', monospace; }
+      `}</style>
       <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
       {/* NAV - two rows */}
