@@ -1287,13 +1287,7 @@ const FundamentalCharts = ({ S }) => {
           max_tokens: 2000,
           messages: [{
             role: "user",
-            content: (() => {
-                const cy = new Date().getFullYear();
-                const sy = cy - 9;
-                const yrs = Array.from({length:10},(_,i)=>String(sy+i));
-                return `Dnešní datum je ${cy}. Pro akciový ticker ${t.toUpperCase()} vrať fundamentální finanční data od roku ${sy} do roku ${cy} jako JSON objekt BEZ jakéhokoliv textu nebo markdown, pouze čistý JSON.
-
-DŮLEŽITÉ: Pole years MUSÍ obsahovat roky ${sy} až ${cy}. Pro rok ${cy} použij nejnovější dostupná data (TTM nebo fiskální rok ${cy}).
+            content: `Pro akciový ticker ${t.toUpperCase()} vrať fundamentální finanční data za posledních 8-10 let jako JSON objekt BEZ jakéhokoliv textu, pouze čistý JSON.
 
 Struktura:
 {
@@ -1303,26 +1297,25 @@ Struktura:
   "currency": "USD",
   "currentPrice": číslo,
   "marketCap": číslo v miliardách,
-  "years": ${JSON.stringify(yrs)},
-  "revenue": [čísla v miliardách USD pro každý rok],
-  "netIncome": [čísla v miliardách USD pro každý rok],
-  "ebitda": [čísla v miliardách USD pro každý rok],
-  "freeCashFlow": [čísla v miliardách USD pro každý rok],
-  "eps": [čísla pro každý rok],
-  "dividendPerShare": [čísla pro každý rok, 0 pokud neplatí],
-  "peRatio": [čísla pro každý rok, null pokud záporné EPS],
-  "totalDebt": [čísla v miliardách USD pro každý rok],
-  "cashAndEquivalents": [čísla v miliardách USD pro každý rok],
-  "sharesOutstanding": [čísla v miliardách pro každý rok],
-  "roe": [procenta pro každý rok],
-  "grossMargin": [procenta pro každý rok],
-  "operatingMargin": [procenta pro každý rok],
-  "netMargin": [procenta pro každý rok],
-  "summary": "2-3 věty o fundamentální kvalitě společnosti v češtině"
+  "years": ["2016","2017","2018","2019","2020","2021","2022","2023","2024"],
+  "revenue": [čísla v miliardách USD],
+  "netIncome": [čísla v miliardách USD],
+  "ebitda": [čísla v miliardách USD],
+  "freeCashFlow": [čísla v miliardách USD],
+  "eps": [čísla],
+  "dividendPerShare": [čísla, 0 pokud neplatí],
+  "peRatio": [čísla, null pokud záporné EPS],
+  "totalDebt": [čísla v miliardách USD],
+  "cashAndEquivalents": [čísla v miliardách USD],
+  "sharesOutstanding": [čísla v miliardách],
+  "roe": [procenta],
+  "grossMargin": [procenta],
+  "operatingMargin": [procenta],
+  "netMargin": [procenta],
+  "summary": "2-3 věty o fundamentální kvalitě společnosti"
 }
 
-Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}. Použij skutečná historická data. Pokud ticker neexistuje, vrať {"error": "Ticker nenalezen"}.`;
-              })()
+Použij skutečná historická data. Pokud ticker neexistuje, vrať {"error": "Ticker nenalezen"}.`
           }]
         })
       });
