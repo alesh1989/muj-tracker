@@ -1,4 +1,5 @@
-// Vercel Serverless Function — Yahoo Finance price fetcher
+// Vercel Serverless Function — Stock price fetcher
+// Uses multiple free APIs with fallback
 export const config = { runtime: "nodejs" };
 
 export default async function handler(req, res) {
@@ -24,92 +25,120 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Chybí seznam tickerů" });
   }
 
-  // Filter out non-stock tickers
-  const stockTickers = tickers.filter(t => !["VKLAD","VÝBĚR",""].includes(t));
+  const stockTickers = [...new Set(tickers.filter(t =>
+    t && !["VKLAD","VÝBĚR",""].includes(t)
+  ))];
+
   if (stockTickers.length === 0) return res.status(200).json({ prices: {} });
 
   const results = {};
-  const errors = [];
 
-  // Fetch in batches of 10
-  const batches = [];
-  for (let i = 0; i < stockTickers.length; i += 10) {
-    batches.push(stockTickers.slice(i, i + 10));
+  // ── METHOD 1: Yahoo Finance (with proper headers) ────────────────────────
+  try {
+    const symbols = stockTickers.join(",");
+    const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}&fields=regularMarketPrice,regularMarketChangePercent,currency,shortName`;
+
+    const r = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://finance.yahoo.com",
+        "Referer": "https://finance.yahoo.com/",
+      },
+      signal: AbortSignal.timeout(12000),
+    });
+
+    if (r.ok) {
+      const data = await r.json();
+      const quotes = data?.quoteResponse?.result || [];
+      quotes.forEach(q => {
+        if (q.regularMarketPrice != null) {
+          results[q.symbol] = {
+            price: parseFloat(q.regularMarketPrice.toFixed(4)),
+            currency: q.currency || "USD",
+            change1d: q.regularMarketChangePercent != null
+              ? parseFloat(q.regularMarketChangePercent.toFixed(2))
+              : 0,
+            lastUpdated: new Date().toISOString(),
+            source: "Yahoo Finance",
+          };
+        }
+      });
+      console.log(`Yahoo: got ${Object.keys(results).length}/${stockTickers.length}`);
+    }
+  } catch(e) {
+    console.warn("Yahoo Finance error:", e.message);
   }
 
-  for (const batch of batches) {
-    const symbols = batch.join(",");
+  // ── METHOD 2: Fallback via yh-finance alternative endpoint ───────────────
+  const missing = stockTickers.filter(t => !results[t]);
+  if (missing.length > 0) {
     try {
-      // Yahoo Finance v8 API
-      const url = `https://query1.finance.yahoo.com/v8/finance/spark?symbols=${encodeURIComponent(symbols)}&range=1d&interval=1d`;
-      const r1 = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          "Accept": "application/json",
-        },
-        signal: AbortSignal.timeout(10000),
-      });
-
-      if (r1.ok) {
-        const data = await r1.json();
-        const sparkData = data?.spark?.result || [];
-        sparkData.forEach(item => {
-          const symbol = item.symbol;
-          const response = item.response?.[0];
-          const meta = response?.meta;
-          if (meta && meta.regularMarketPrice) {
-            results[symbol] = {
-              price: parseFloat(meta.regularMarketPrice.toFixed(2)),
+      for (const ticker of missing.slice(0, 10)) {
+        try {
+          const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`;
+          const r = await fetch(url, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+              "Accept": "application/json",
+            },
+            signal: AbortSignal.timeout(6000),
+          });
+          if (!r.ok) continue;
+          const data = await r.json();
+          const meta = data?.chart?.result?.[0]?.meta;
+          if (meta?.regularMarketPrice) {
+            results[ticker] = {
+              price: parseFloat(meta.regularMarketPrice.toFixed(4)),
               currency: meta.currency || "USD",
               change1d: meta.previousClose
                 ? parseFloat(((meta.regularMarketPrice - meta.previousClose) / meta.previousClose * 100).toFixed(2))
                 : 0,
               lastUpdated: new Date().toISOString(),
+              source: "Yahoo Chart",
             };
           }
-        });
-      }
-
-      // Fallback: Yahoo v7 quote API for missing tickers
-      const missing = batch.filter(t => !results[t]);
-      if (missing.length > 0) {
-        const url2 = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(missing.join(","))}`;
-        const r2 = await fetch(url2, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-          },
-          signal: AbortSignal.timeout(8000),
-        });
-        if (r2.ok) {
-          const d2 = await r2.json();
-          const quotes = d2?.quoteResponse?.result || [];
-          quotes.forEach(q => {
-            if (q.regularMarketPrice) {
-              results[q.symbol] = {
-                price: parseFloat(q.regularMarketPrice.toFixed(2)),
-                currency: q.currency || "USD",
-                change1d: q.regularMarketChangePercent
-                  ? parseFloat(q.regularMarketChangePercent.toFixed(2))
-                  : 0,
-                lastUpdated: new Date().toISOString(),
-              };
-            }
-          });
-        }
+        } catch {}
       }
     } catch(e) {
-      errors.push(`Batch ${symbols}: ${e.message}`);
+      console.warn("Yahoo Chart fallback error:", e.message);
     }
   }
 
-  // Log any errors but still return partial results
-  if (errors.length) console.warn("Price fetch errors:", errors);
+  // ── METHOD 3: Alpha Vantage free tier (no key needed for basic) ──────────
+  const stillMissing = stockTickers.filter(t => !results[t]);
+  if (stillMissing.length > 0) {
+    // Use Alpha Vantage if API key is set
+    const avKey = process.env.ALPHA_VANTAGE_KEY;
+    if (avKey) {
+      for (const ticker of stillMissing.slice(0, 5)) {
+        try {
+          const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${ticker}&apikey=${avKey}`;
+          const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+          if (!r.ok) continue;
+          const data = await r.json();
+          const quote = data?.["Global Quote"];
+          if (quote?.["05. price"]) {
+            const price = parseFloat(quote["05. price"]);
+            const prevClose = parseFloat(quote["08. previous close"] || price);
+            results[ticker] = {
+              price: parseFloat(price.toFixed(4)),
+              currency: "USD",
+              change1d: parseFloat(((price - prevClose) / prevClose * 100).toFixed(2)),
+              lastUpdated: new Date().toISOString(),
+              source: "Alpha Vantage",
+            };
+          }
+        } catch {}
+      }
+    }
+  }
 
   return res.status(200).json({
     prices: results,
-    errors: errors.length ? errors : undefined,
     fetched: Object.keys(results).length,
     requested: stockTickers.length,
+    missing: stockTickers.filter(t => !results[t]),
   });
 }
