@@ -67,7 +67,7 @@ const toCZK = (amount, currency, rates) => {
   if (currency === "EUR") return amount * (rates.EUR_CZK || 25.4);
   return amount;
 };
-const upColor = (n) => (n >= 0 ? "#22d3a0" : "#f87171");
+const upColor = (n) => (n >= 0 ? "#10b981" : "#ef4444");
 
 // ─── FETCH FX RATES via exchangerate.host (free, no key) ─────────────────────
 async function fetchLiveRates() {
@@ -1007,8 +1007,7 @@ function NewsTab({ portfolio, S }) {
   const RSS_FEEDS = [
     { url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AAPL,MSFT,GOOGL&region=US&lang=en-US", label: "Yahoo Finance" },
     { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", label: "CNBC Markets" },
-    { url: "https://feeds.marketwatch.com/marketwatch/topstories/", label: "MarketWatch" },
-    { url: "https://feeds.a.dj.com/rss/RSSMarketsMain.xml", label: "WSJ Markets" },
+    { url: "https://feeds.bloomberg.com/markets/news.rss", label: "Bloomberg" },
   ];
 
   const fetchNews = async () => {
@@ -1016,26 +1015,29 @@ function NewsTab({ portfolio, S }) {
     setError("");
     const allNews = [];
 
-    // Use rss2json.com — free CORS-friendly RSS to JSON API
+    // Fetch from multiple RSS via allorigins
     for (const feed of RSS_FEEDS) {
       try {
-        const apiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.url)}&api_key=&count=15`;
-        const res = await fetch(apiUrl, { signal: AbortSignal.timeout(8000) });
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(feed.url)}`;
+        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) });
         if (!res.ok) continue;
         const data = await res.json();
-        if (data.status !== "ok" || !data.items) continue;
-        data.items.forEach(item => {
-          const title = item.title || "";
-          const link = item.link || "";
-          const pubDate = item.pubDate || "";
-          const desc = (item.description || item.content || "").replace(/<[^>]*>/g,"").slice(0,200);
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(data.contents, "text/xml");
+        const items = Array.from(xml.querySelectorAll("item")).slice(0, 15);
+        items.forEach(item => {
+          const title = item.querySelector("title")?.textContent || "";
+          const link = item.querySelector("link")?.textContent || "";
+          const pubDate = item.querySelector("pubDate")?.textContent || "";
+          const desc = item.querySelector("description")?.textContent?.replace(/<[^>]*>/g,"").slice(0,200) || "";
+          // Check which portfolio ticker this relates to
           const relatedTickers = tickers.filter(t =>
             title.toLowerCase().includes(t.toLowerCase()) ||
             desc.toLowerCase().includes(t.toLowerCase())
           );
           allNews.push({
             id: link + title,
-            title: title.slice(0, 130),
+            title: title.slice(0, 120),
             link,
             desc,
             date: pubDate ? new Date(pubDate) : new Date(),
@@ -1044,7 +1046,7 @@ function NewsTab({ portfolio, S }) {
             isPortfolio: relatedTickers.length > 0,
           });
         });
-      } catch(e) { console.warn("RSS feed error:", feed.label, e.message); }
+      } catch {}
     }
 
     // Deduplicate by title similarity
@@ -1157,88 +1159,71 @@ function NewsTab({ portfolio, S }) {
 
 
 // ─── MINI SVG LINE/BAR CHART ─────────────────────────────────────────────────
-const MiniChart = ({ data, type="bar", color="#6c63ff", label="", unit="", height=110, darkMode=true }) => {
-  if (!data || data.length < 2) return <div style={{color:"#475569",fontSize:11,padding:20,textAlign:"center"}}>Nedostatek dat</div>;
+const MiniChart = ({ data, type="bar", color="#6366f1", label="", unit="", height=100 }) => {
+  if (!data || data.length < 2) return <div style={{color:"#334155",fontSize:11,padding:20,textAlign:"center"}}>Nedostatek dat</div>;
   const vals = data.map(d => d.value);
-  const min = Math.min(...vals, 0); const max = Math.max(...vals, 0.001);
+  const min = Math.min(...vals); const max = Math.max(...vals);
   const range = max - min || 1;
-  const w = 440, h = height, pad = { t:12, b:36, l:58, r:12 };
+  const w = 420, h = height, pad = { t:8, b:28, l:52, r:8 };
   const iW = w-pad.l-pad.r, iH = h-pad.t-pad.b;
-  const xS = i => pad.l + (i/(data.length-1||1))*iW;
+  const xS = i => pad.l + (i/(data.length-1))*iW;
   const yS = v => pad.t + iH - ((v-min)/range)*iH;
-  const barW = Math.max(6, (iW/data.length) - 5);
-  const bg = darkMode ? "#0f1628" : "#e8edf5";
-  const gridColor = darkMode ? "#1e2d45" : "#d0d8e8";
-  const labelColor = darkMode ? "#5a7399" : "#6a7fa0";
-  const textColor = darkMode ? "#c8d8f0" : "#2a3a5a";
+  const barW = Math.max(4, iW/data.length - 4);
 
   const fmtV = v => {
     const abs = Math.abs(v);
     if (abs >= 1e9) return (v/1e9).toFixed(1)+"B";
     if (abs >= 1e6) return (v/1e6).toFixed(1)+"M";
-    if (abs >= 1000) return (v/1000).toFixed(0)+"K";
-    return Number.isInteger(v) ? v.toString() : v.toFixed(1);
+    if (abs >= 1e3) return (v/1e3).toFixed(1)+"K";
+    return v.toFixed(1);
   };
 
   return (
-    <div style={{background:bg, borderRadius:12, padding:"8px 4px", overflowX:"auto"}}>
-      <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",minWidth:280,height:"auto"}}>
+    <div style={{overflowX:"auto"}}>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",minWidth:260,height:"auto"}}>
         <defs>
           <linearGradient id={`g_${label}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.5"/>
-            <stop offset="100%" stopColor={color} stopOpacity="0.05"/>
+            <stop offset="0%" stopColor={color} stopOpacity="0.3"/>
+            <stop offset="100%" stopColor={color} stopOpacity="0"/>
           </linearGradient>
         </defs>
-        {/* Grid lines + Y labels */}
-        {[0,0.25,0.5,0.75,1].map((t,i)=>{
-          const v = max - range*t;
-          return (
-            <g key={i}>
-              <line x1={pad.l} y1={pad.t+iH*t} x2={w-pad.r} y2={pad.t+iH*t} stroke={gridColor} strokeWidth="1"/>
-              <text x={pad.l-6} y={pad.t+iH*t+4} textAnchor="end" fill={labelColor} fontSize="9" fontWeight="600">
-                {fmtV(v)}{unit}
-              </text>
-            </g>
-          );
-        })}
+        {/* Grid */}
+        {[0,0.25,0.5,0.75,1].map(t=>(
+          <g key={t}>
+            <line x1={pad.l} y1={pad.t+iH*t} x2={w-pad.r} y2={pad.t+iH*t} stroke="#1e293b" strokeWidth="1"/>
+            <text x={pad.l-4} y={pad.t+iH*t+4} textAnchor="end" fill="#475569" fontSize="8">
+              {fmtV(max-(range*t))}{unit}
+            </text>
+          </g>
+        ))}
         {/* Zero line */}
         {min < 0 && max > 0 && (
-          <line x1={pad.l} y1={yS(0)} x2={w-pad.r} y2={yS(0)} stroke={darkMode?"#4a6080":"#8899bb"} strokeWidth="1.5" strokeDasharray="4,3"/>
+          <line x1={pad.l} y1={yS(0)} x2={w-pad.r} y2={yS(0)} stroke="#334155" strokeWidth="1.5" strokeDasharray="3,2"/>
         )}
         {type === "bar" && data.map((d,i) => {
-          const bx = pad.l + (i/data.length)*iW + (iW/data.length-barW)/2;
+          const bx = pad.l + (i/data.length)*iW + (iW/data.length - barW)/2;
           const isPos = d.value >= 0;
-          const bH = Math.max(2, Math.abs((d.value-(min<0?0:min))/range*iH));
-          const by = isPos ? yS(Math.max(d.value,0)) : yS(0);
-          const c = d.value >= 0 ? color : "#f87171";
-          // Value label on top of bar
-          const showVal = barW > 20;
+          const barH = Math.abs((d.value-0)/range * iH);
+          const by = isPos ? yS(d.value) : yS(0);
+          const c = d.value >= 0 ? color : "#ef4444";
           return (
             <g key={i}>
-              <rect x={bx} y={by} width={barW} height={bH} fill={c} opacity={0.92} rx={3}>
-                <title>{d.label}: {fmtV(d.value)}{unit}</title>
-              </rect>
-              {showVal && (
-                <text x={bx+barW/2} y={isPos?by-3:by+bH+10} textAnchor="middle" fill={textColor} fontSize="7.5" fontWeight="700">
-                  {fmtV(d.value)}{unit}
-                </text>
-              )}
-              <text x={bx+barW/2} y={h-6} textAnchor="middle" fill={labelColor} fontSize="8.5" fontWeight="600">{d.label}</text>
+              <rect x={bx} y={by} width={barW} height={Math.max(1,barH)} fill={c} opacity={0.85} rx={2}/>
+              <text x={bx+barW/2} y={h-4} textAnchor="middle" fill="#475569" fontSize="8">{d.label}</text>
             </g>
           );
         })}
         {type === "line" && (
           <>
             <path d={data.map((d,i)=>`${i===0?"M":"L"}${xS(i)},${yS(d.value)}`).join(" ")+
-              ` L${xS(data.length-1)},${h-pad.b} L${xS(0)},${h-pad.b} Z`}
+              ` L${xS(data.length-1)},${pad.t+iH} L${xS(0)},${pad.t+iH} Z`}
               fill={`url(#g_${label})`}/>
             <path d={data.map((d,i)=>`${i===0?"M":"L"}${xS(i)},${yS(d.value)}`).join(" ")}
-              fill="none" stroke={color} strokeWidth="2.5"/>
+              fill="none" stroke={color} strokeWidth="2"/>
             {data.map((d,i)=>(
               <g key={i}>
-                <circle cx={xS(i)} cy={yS(d.value)} r="3.5" fill={color} stroke={bg} strokeWidth="1.5"/>
-                <text x={xS(i)} y={yS(d.value)-8} textAnchor="middle" fill={textColor} fontSize="8" fontWeight="700">{fmtV(d.value)}{unit}</text>
-                <text x={xS(i)} y={h-6} textAnchor="middle" fill={labelColor} fontSize="8.5" fontWeight="600">{d.label}</text>
+                <circle cx={xS(i)} cy={yS(d.value)} r="3" fill={color}/>
+                <text x={xS(i)} y={h-4} textAnchor="middle" fill="#475569" fontSize="8">{d.label}</text>
               </g>
             ))}
           </>
@@ -1246,25 +1231,18 @@ const MiniChart = ({ data, type="bar", color="#6c63ff", label="", unit="", heigh
         {type === "combo" && (
           <>
             {data.map((d,i) => {
-              const bx = pad.l + (i/data.length)*iW + (iW/data.length-barW)/2;
-              const isPos = d.value >= 0;
-              const bH = Math.max(2, Math.abs(yS(0)-yS(d.value)));
-              const by = isPos ? yS(d.value) : yS(0);
-              const c = d.value >= 0 ? color : "#f87171";
-              return (
-                <g key={i}>
-                  <rect x={bx} y={by} width={barW} height={bH} fill={c} opacity={0.85} rx={3}/>
-                  <text x={bx+barW/2} y={isPos?by-3:by+bH+10} textAnchor="middle" fill={textColor} fontSize="7.5" fontWeight="700">{fmtV(d.value)}{unit}</text>
-                  <text x={bx+barW/2} y={h-6} textAnchor="middle" fill={labelColor} fontSize="8.5" fontWeight="600">{d.label}</text>
-                </g>
-              );
+              const bx = pad.l + (i/data.length)*iW + (iW/data.length - barW)/2;
+              return <rect key={i} x={bx} y={yS(Math.max(d.value,0))} width={barW} height={Math.max(1,Math.abs(yS(0)-yS(d.value)))} fill={d.value>=0?color+"66":"#ef444466"} rx={2}/>;
             })}
+            {data.map((d,i)=>(
+              <text key={i} x={pad.l+(i/data.length)*iW+(iW/data.length)/2} y={h-4} textAnchor="middle" fill="#475569" fontSize="8">{d.label}</text>
+            ))}
           </>
         )}
       </svg>
     </div>
   );
-}
+};
 
 // ─── FUNDAMENTAL CHARTS COMPONENT ────────────────────────────────────────────
 const FundamentalCharts = ({ S }) => {
@@ -1935,11 +1913,8 @@ export default function App() {
 
   // ─── ACTIVE PORTFOLIO TRANSACTIONS ────────────────────────────────────────
   const activeTransactions = useMemo(() =>
-    transactions.filter(t => {
-      if (!t.portfolioId) return activePortfolioId === portfolios[0]?.id; // legacy: assign to first portfolio
-      return t.portfolioId === activePortfolioId;
-    }),
-    [transactions, activePortfolioId, portfolios]
+    transactions.filter(t => !t.portfolioId || t.portfolioId === activePortfolioId),
+    [transactions, activePortfolioId]
   );
 
   // ─── PORTFOLIO CALCULATIONS ─────────────────────────────────────────────
@@ -2097,74 +2072,30 @@ export default function App() {
   }, [transactions]);
 
   // ─── STYLES ────────────────────────────────────────────────────────────
-  // Neumorphism color palette
-  const bg     = darkMode ? "#13192b" : "#e8edf5";
-  const bgCard = darkMode ? "#161d30" : "#eef2f9";
-  const textPrimary = darkMode ? "#e8f0fe" : "#1a2540";
-  const textSec = darkMode ? "#8b9fc0" : "#4a5a7a";
-  const textMuted = darkMode ? "#3d5080" : "#8899bb";
-  const accent = "#6c63ff";
-  const border = darkMode ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.08)";
-  // Neumorphism shadows
-  const nmShadow = darkMode
-    ? "6px 6px 14px #0b1020, -4px -4px 10px #1e2a45"
-    : "6px 6px 14px #c5cad6, -4px -4px 10px #ffffff";
-  const nmInset = darkMode
-    ? "inset 3px 3px 8px #0b1020, inset -3px -3px 8px #1e2a45"
-    : "inset 3px 3px 8px #c5cad6, inset -3px -3px 8px #ffffff";
-  const nmBtn = darkMode
-    ? "4px 4px 10px #0b1020, -3px -3px 8px #1e2a45"
-    : "4px 4px 10px #c5cad6, -3px -3px 8px #ffffff";
-
   const S = {
-    app: { minHeight:"100vh", background:bg, color:textPrimary,
+    app: { minHeight:"100vh",
+      background: darkMode ? "#0a0f1e" : "#f1f5f9",
+      color: darkMode ? "#e2e8f0" : "#1e293b",
       fontFamily:"'IBM Plex Mono','Courier New',monospace", fontSize },
-    nav: { background:bgCard, boxShadow: darkMode ? "0 2px 20px #0b1020" : "0 2px 20px rgba(0,0,0,0.1)",
-      position:"sticky", top:0, zIndex:100 },
-    navTop: { padding:"0 20px", display:"flex", alignItems:"center", justifyContent:"space-between",
-      borderBottom: `1px solid ${border}` },
+    nav: { background: darkMode ? "#0d1424" : "#ffffff", borderBottom: darkMode ? "1px solid #1e293b" : "1px solid #e2e8f0", position:"sticky", top:0, zIndex:100 },
+    navTop: { padding:"0 20px", display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom: darkMode ? "1px solid #0f172a" : "1px solid #e2e8f0" },
     navTabs: { padding:"0 20px", display:"flex", alignItems:"center", gap:0, overflowX:"auto" },
-    logo: { fontSize:13, fontWeight:800, color:accent, letterSpacing:"0.12em", whiteSpace:"nowrap", padding:"12px 0" },
-    navBtn: (active) => ({ background:"none", border:"none", padding:"12px 14px", cursor:"pointer",
-      fontSize:10, fontFamily:"inherit",
-      color: active ? accent : textSec,
-      borderBottom: active ? `2px solid ${accent}` : "2px solid transparent",
-      transition:"all 0.2s", whiteSpace:"nowrap", letterSpacing:"0.06em", textTransform:"uppercase",
-      fontWeight: active ? 700 : 400 }),
+    logo: { fontSize:13, fontWeight:700, color:"#6366f1", letterSpacing:"0.1em", whiteSpace:"nowrap", padding:"12px 0" },
+    navBtn: (active) => ({ background:"none", border:"none", padding:"12px 14px", cursor:"pointer", fontSize:10, fontFamily:"inherit", color:active?"#6366f1":"#64748b", borderBottom:active?"2px solid #6366f1":"2px solid transparent", transition:"all 0.2s", whiteSpace:"nowrap", letterSpacing:"0.06em", textTransform:"uppercase" }),
     main: { padding:"20px", maxWidth:1200, margin:"0 auto" },
-    card: { background:bgCard, borderRadius:16, padding:20, marginBottom:16,
-      boxShadow: nmShadow, border: `1px solid ${border}` },
-    statCard: (ac="#6366f1") => ({ background:bgCard, borderRadius:14, padding:18,
-      boxShadow: nmShadow, border:`1px solid ${border}`,
-      borderTop:`3px solid ${ac}` }),
-    label: { fontSize:10, color:textMuted, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:5, fontWeight:600 },
-    badge: (color) => ({ display:"inline-block", padding:"2px 8px", borderRadius:6, fontSize:10,
-      fontWeight:700, background:color+"28", color, letterSpacing:"0.04em", textTransform:"uppercase",
-      border:`1px solid ${color}44` }),
-    btn: (v="primary") => ({
-      background: v==="primary" ? `linear-gradient(135deg,#5b52f0,${accent})` : v==="danger" ? "transparent" : bgCard,
-      color: v==="primary" ? "#fff" : v==="danger" ? "#f87171" : textSec,
-      border: v==="outline" ? `1px solid ${border}` : v==="danger" ? "1px solid #f8717144" : "none",
-      borderRadius:10, padding:"8px 16px", cursor:"pointer", fontSize:11, fontFamily:"inherit",
-      fontWeight:600, letterSpacing:"0.05em", transition:"all 0.2s",
-      boxShadow: v==="primary" ? "0 4px 15px rgba(108,99,255,0.4)" : v==="outline"||v==="danger" ? nmBtn : "none",
-    }),
-    input: { background:bgCard, border:`1px solid ${border}`, borderRadius:10,
-      color:textPrimary, padding:"9px 14px", fontSize:12, fontFamily:"inherit",
-      width:"100%", boxSizing:"border-box", boxShadow:nmInset, outline:"none" },
-    select: { background:bgCard, border:`1px solid ${border}`, borderRadius:10,
-      color:textPrimary, padding:"9px 14px", fontSize:12, fontFamily:"inherit",
-      width:"100%", boxSizing:"border-box", boxShadow:nmInset },
+    card: { background: darkMode ? "#0d1424" : "#ffffff", border: darkMode ? "1px solid #1e293b" : "1px solid #e2e8f0", borderRadius:8, padding:20, marginBottom:16 },
+    statCard: (accent="#6366f1") => ({ background: darkMode ? "#0d1424" : "#ffffff", border: darkMode ? "1px solid #1e293b" : "1px solid #e2e8f0", borderRadius:8, padding:18, borderLeft:`3px solid ${accent}` }),
+    label: { fontSize:10, color:"#475569", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:4 },
+    badge: (color) => ({ display:"inline-block", padding:"2px 7px", borderRadius:4, fontSize:10, fontWeight:600, background:color+"22", color, letterSpacing:"0.05em", textTransform:"uppercase" }),
+    btn: (v="primary") => ({ background:v==="primary"?"linear-gradient(135deg,#4f46e5,#6366f1)":v==="danger"?"#dc262622":"#1e293b", color:v==="primary"?"#fff":v==="danger"?"#ef4444":"#94a3b8", border:v==="outline"?"1px solid #334155":"none", borderRadius:6, padding:"8px 16px", cursor:"pointer", fontSize:11, fontFamily:"inherit", fontWeight:600, letterSpacing:"0.05em", transition:"all 0.2s" }),
+    input: { background: darkMode ? "#0a0f1e" : "#f8fafc", border: darkMode ? "1px solid #334155" : "1px solid #cbd5e1", borderRadius:6, color: darkMode ? "#e2e8f0" : "#1e293b", padding:"8px 12px", fontSize:12, fontFamily:"inherit", width:"100%", boxSizing:"border-box" },
+    select: { background: darkMode ? "#0a0f1e" : "#f8fafc", border: darkMode ? "1px solid #334155" : "1px solid #cbd5e1", borderRadius:6, color: darkMode ? "#e2e8f0" : "#1e293b", padding:"8px 12px", fontSize:12, fontFamily:"inherit", width:"100%", boxSizing:"border-box" },
     table: { width:"100%", borderCollapse:"collapse" },
-    th: { textAlign:"left", padding:"10px 14px", fontSize:10, color:textMuted,
-      borderBottom:`1px solid ${border}`, letterSpacing:"0.08em", textTransform:"uppercase", fontWeight:700 },
-    td: { padding:"11px 14px", borderBottom:`1px solid ${border}`, fontSize:12, color:textPrimary },
-    modal: { position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", display:"flex",
-      alignItems:"center", justifyContent:"center", zIndex:1000, padding:20, backdropFilter:"blur(4px)" },
-    modalBox: { background:bgCard, border:`1px solid ${border}`, borderRadius:20,
-      padding:28, width:"100%", maxWidth:520, maxHeight:"90vh", overflowY:"auto", boxShadow:nmShadow },
-    sectionTitle: { fontSize:10, fontWeight:800, color:textMuted, letterSpacing:"0.14em",
-      textTransform:"uppercase", marginBottom:14, paddingBottom:8, borderBottom:`1px solid ${border}` },
+    th: { textAlign:"left", padding:"10px 12px", fontSize:10, color:"#475569", borderBottom:"1px solid #1e293b", letterSpacing:"0.08em", textTransform:"uppercase" },
+    td: { padding:"11px 12px", borderBottom:"1px solid #0f172a", fontSize:12 },
+    modal: { position:"fixed", inset:0, background:"#000b", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000, padding:20, backdropFilter:"blur(2px)" },
+    modalBox: { background: darkMode ? "#0d1424" : "#ffffff", border: darkMode ? "1px solid #334155" : "1px solid #e2e8f0", borderRadius:12, padding:28, width:"100%", maxWidth:520, maxHeight:"90vh", overflowY:"auto" },
+    sectionTitle: { fontSize:10, fontWeight:700, color:"#475569", letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:14, paddingBottom:7, borderBottom:"1px solid #1e293b" },
   };
 
   const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b" };
@@ -2187,15 +2118,7 @@ export default function App() {
     <div style={{...S.app, "--font-scale": fontScale, "--base-font": fontSize + "px"}}>
       <style>{`
         :root { font-size: ${fontSize}px; }
-        * { font-family: 'IBM Plex Mono', 'Courier New', monospace; box-sizing: border-box; }
-        body { background: ${bg}; margin: 0; }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: ${bg}; }
-        ::-webkit-scrollbar-thumb { background: ${darkMode?"#2d3f5a":"#b0bdd0"}; border-radius: 3px; }
-        input:focus, select:focus { outline: 2px solid #6c63ff44 !important; border-color: #6c63ff !important; }
-        button:hover { opacity: 0.88; transform: translateY(-1px); }
-        button:active { transform: translateY(0); opacity: 1; }
-        tr:hover td { background: ${darkMode?"rgba(108,99,255,0.05)":"rgba(108,99,255,0.03)"}; }
+        * { font-family: 'IBM Plex Mono', 'Courier New', monospace; }
       `}</style>
       <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
@@ -2226,16 +2149,11 @@ export default function App() {
             {ratesStatus === "loading" && <span style={{ fontSize:10, color:"#f59e0b" }}>↻ kurzy...</span>}
             {ratesStatus === "ok" && <span style={{ fontSize:10, color:"#10b981" }}>✓ kurzy</span>}
             {ratesStatus === "error" && <span style={{ fontSize:10, color:"#ef4444" }}>kurzy offline</span>}
-            <span style={{ fontSize:10, fontWeight:700, color: darkMode?"#8ba8d0":"#4a6080",
-              background: darkMode?"#1e2d45":"#d8e4f4",
-              padding:"3px 10px", borderRadius:8 }}>
-              USD <b style={{color: darkMode?"#c8d8f0":"#1a2540"}}>{rates.USD_CZK}</b>
-              &nbsp;·&nbsp;EUR <b style={{color: darkMode?"#c8d8f0":"#1a2540"}}>{rates.EUR_CZK}</b>
-            </span>
-            <span style={{ fontSize:10, fontWeight:700, padding:"3px 10px", borderRadius:8,
-              background: syncStatus==="ok"?(darkMode?"#064e3b":"#d1fae5"):syncStatus==="syncing"?(darkMode?"#451a03":"#fef3c7"):syncStatus==="error"?(darkMode?"#450a0a":"#fee2e2"):(darkMode?"#1e2d45":"#d8e4f4"),
-              color: syncStatus==="ok"?"#10b981":syncStatus==="syncing"?"#f59e0b":syncStatus==="error"?"#ef4444":(darkMode?"#8ba8d0":"#4a6080") }}>
-              {syncStatus==="ok"?"☁ sync OK":syncStatus==="syncing"?"↻ ukládám...":syncStatus==="error"?"⚠ chyba":"💾 lokálně"}
+            <span style={{ fontSize:10, color:"#334155" }}>USD {rates.USD_CZK} · EUR {rates.EUR_CZK}</span>
+            <span style={{ fontSize:10, padding:"2px 8px", borderRadius:10,
+              background: syncStatus==="ok"?"#10b98122":syncStatus==="syncing"?"#f59e0b22":syncStatus==="error"?"#ef444422":"#1e293b",
+              color: syncStatus==="ok"?"#10b981":syncStatus==="syncing"?"#f59e0b":syncStatus==="error"?"#ef4444":"#475569" }}>
+              {syncStatus==="ok"?"☁ sync OK":syncStatus==="syncing"?"↻ ukládám...":syncStatus==="error"?"⚠ sync chyba":"💾 lokálně"}
             </span>
             {/* Font size controls */}
             <div style={{ display:"flex", alignItems:"center", gap:4 }}>
@@ -2281,7 +2199,7 @@ export default function App() {
               ].map((s,i) => (
                 <div key={i} style={S.statCard(s.accent)}>
                   <div style={S.label}>{s.label}</div>
-                  <div style={{ fontSize:16, fontWeight:800, color:s.accent, letterSpacing:"0.03em" }}>{s.value}</div>
+                  <div style={{ fontSize:17, fontWeight:700, color:s.accent }}>{s.value}</div>
                   {s.sub && <div style={{ fontSize:11, color:s.accent, marginTop:2 }}>{s.sub}</div>}
                 </div>
               ))}
@@ -3265,12 +3183,7 @@ export default function App() {
                 <button key={i} style={{...S.btn(i===3?"danger":"outline"),padding:"10px 14px",textAlign:"left",border:i===3?"1px solid #dc2626":"1px solid #334155"}}
                   onClick={()=>{
                     if(window.confirm(`Opravdu smazat: "${opt.label}"? Tato akce je nevratná.`)){
-                      setTransactions(prev=>prev.filter(t=>{
-                          // treat missing portfolioId as belonging to active portfolio
-                          const pid = t.portfolioId || activePortfolioId;
-                          if(pid !== activePortfolioId) return true; // keep other portfolios
-                          return !opt.types.includes(t.type); // remove matching types
-                        }));
+                      setTransactions(prev=>prev.filter(t=>t.portfolioId!==activePortfolioId||!opt.types.includes(t.type)));
                       setShowDeleteAll(false);
                     }
                   }}>
