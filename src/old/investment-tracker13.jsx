@@ -32,15 +32,6 @@ const SAMPLE_PRICES = {
   MSFT: { price: 415.2, currency: "USD", change1d: 0.88 },
   CEZ:  { price: 850,   currency: "CZK", change1d: 0.5 },
   ETH:  { price: 3250,  currency: "USD", change1d: 1.5 },
-  KO:   { price: 71.2,  currency: "USD", change1d: 0.3 },
-  JNJ:  { price: 152.4, currency: "USD", change1d: -0.2 },
-  SPY:  { price: 528.0, currency: "USD", change1d: 0.6 },
-  QQQ:  { price: 455.0, currency: "USD", change1d: 0.9 },
-  NVDA: { price: 875.0, currency: "USD", change1d: 2.1 },
-  O:    { price: 58.3,  currency: "USD", change1d: 0.1 },
-  DAL:  { price: 48.5,  currency: "USD", change1d: -0.4 },
-  IRM:  { price: 115.2, currency: "USD", change1d: 0.7 },
-  MM0:  { price: 85.0,  currency: "CZK", change1d: 0.2 },
 };
 
 const SAMPLE_DIVIDENDS = [
@@ -2576,53 +2567,6 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [loaded]);
 
-  // ─── AUTO FETCH PRICES ──────────────────────────────────────────────────
-  const [pricesStatus, setPricesStatus] = useState("idle"); // idle|loading|ok|error
-
-  const fetchPrices = useCallback(async (tickerList) => {
-    const tickers = tickerList || Object.keys(prices).filter(t => !["VKLAD","VÝBĚR"].includes(t));
-    if (tickers.length === 0) return;
-    setPricesStatus("loading");
-    try {
-      const res = await fetch("/api/prices", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tickers }),
-      });
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
-      if (data.prices && Object.keys(data.prices).length > 0) {
-        setPrices(prev => {
-          const updated = { ...prev };
-          Object.entries(data.prices).forEach(([ticker, info]) => {
-            updated[ticker] = { ...updated[ticker], ...info };
-          });
-          return updated;
-        });
-        setPricesStatus("ok");
-      } else {
-        setPricesStatus("error");
-      }
-    } catch(e) {
-      console.warn("fetchPrices error:", e.message);
-      setPricesStatus("error");
-    }
-  }, [prices]);
-
-  // Auto-fetch prices for portfolio tickers every 15 minutes
-  useEffect(() => {
-    if (!loaded) return;
-    const portfolioTickers = [...new Set(
-      activeTransactions.filter(t => t.type === "buy").map(t => t.ticker)
-    )].filter(t => t && !["VKLAD","VÝBĚR"].includes(t));
-    if (portfolioTickers.length === 0) return;
-    // Initial fetch
-    fetchPrices(portfolioTickers);
-    // Refresh every 15 min
-    const interval = setInterval(() => fetchPrices(portfolioTickers), 15 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [loaded, activePortfolioId]);
-
   // ─── AUTO FETCH RATES ───────────────────────────────────────────────────
   const fetchRates = useCallback(async () => {
     setRatesStatus("loading");
@@ -2673,9 +2617,9 @@ export default function App() {
       } else if (t.type === "dividend" && t.dividendAmount) {
         totalDividendsCZK += toCZK(t.dividendAmount, t.currency, rates);
       } else if (t.type === "deposit") {
-        // Deposits don't count as investment cost - they're cash inflows
+        totalInvestedCZK += toCZK(t.amount || 0, t.currency, rates);
       } else if (t.type === "withdraw") {
-        // Withdrawals don't count either
+        totalInvestedCZK -= toCZK(t.amount || 0, t.currency, rates);
       }
     });
     let totalCurrentCZK = 0;
@@ -2777,7 +2721,7 @@ export default function App() {
   }, [activeTransactions]);
 
   // ─── ADD TX STATE ───────────────────────────────────────────────────────
-  const [newTx, setNewTx] = useState({ type:"buy", ticker:"", name:"", category:"stock", date:new Date().toISOString().slice(0,10), quantity:"", price:"", currency:"CZK", fee:"", dividendAmount:"", amount:"", notes:"" });
+  const [newTx, setNewTx] = useState({ type:"buy", ticker:"", name:"", category:"stock", date:new Date().toISOString().slice(0,10), quantity:"", price:"", currency:"USD", fee:"", dividendAmount:"", notes:"" });
 
   const addTransaction = () => {
     const isFlow = newTx.type === "deposit" || newTx.type === "withdraw";
@@ -2882,8 +2826,8 @@ export default function App() {
   };
 
   const t = T[lang] || T.cs; // current translations
-  const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b", cash:"#22d3a0" };
-  const catLabel = { stock:t.stocks, etf:t.etf, crypto:t.crypto, cash:lang==="en"?"Cash":"Hotovost" };
+  const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b" };
+  const catLabel = { stock:t.stocks, etf:t.etf, crypto:t.crypto };
 
   const TABS = ["dashboard","portfolio","transakce","cashflow","dividendy","novinky","analyza","fi","nastaveni"];
   const TAB_LABELS = { dashboard:t.dashboard, portfolio:t.portfolio, transakce:t.transakce, cashflow:t.cashflow, dividendy:t.dividendy, novinky:t.novinky, analyza:t.analyza, fi:t.fi, nastaveni:t.nastaveni };
@@ -2981,9 +2925,6 @@ export default function App() {
           <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
             {ratesStatus === "loading" && <span style={{ fontSize:10, color:"#f59e0b" }}>↻ kurzy...</span>}
             {ratesStatus === "ok" && <span style={{ fontSize:10, color:"#10b981" }}>✓ kurzy</span>}
-            {pricesStatus === "loading" && <span style={{ fontSize:10, color:"#f59e0b" }}>↻ ceny...</span>}
-            {pricesStatus === "ok" && <span style={{ fontSize:10, color:"#10b981" }}>✓ ceny</span>}
-            {pricesStatus === "error" && <span style={{ fontSize:10, color:"#ef4444" }}>⚠ ceny</span>}
             {ratesStatus === "error" && <span style={{ fontSize:10, color:"#ef4444" }}>kurzy offline</span>}
             {!isMobile && (
               <span style={{ fontSize:10, fontWeight:700, color: darkMode?"#8ba8d0":"#4a6080",
@@ -3370,9 +3311,7 @@ export default function App() {
                 </tr></thead>
                 <tbody>
                   {[...activeTransactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t => {
-                    const totalCZK = t.type==="dividend" ? toCZK(t.dividendAmount||0, t.currency, rates)
-                      : (t.type==="deposit"||t.type==="withdraw") ? toCZK(t.amount||0, t.currency, rates)
-                      : toCZK((t.quantity||0)*(t.price||0)+(t.fee||0), t.currency, rates);
+                    const totalCZK = t.type==="dividend" ? toCZK(t.dividendAmount||0, t.currency, rates) : toCZK(t.quantity*t.price+(t.fee||0), t.currency, rates);
                     const typeColor = {buy:"#10b981",sell:"#ef4444",dividend:"#8b5cf6"}[t.type]||"#94a3b8";
                     const typeLabel = {buy:"Nákup",sell:"Prodej",dividend:"Dividenda"}[t.type]||t.type;
                     return (
@@ -3381,8 +3320,8 @@ export default function App() {
                         <td style={S.td}><span style={S.badge(typeColor)}>{typeLabel}</span></td>
                         <td style={{ ...S.td, fontWeight:600, color:"#f1f5f9" }}>{t.ticker}</td>
                         <td style={S.td}><span style={S.badge(catColor[t.category]||"#64748b")}>{catLabel[t.category]||t.category}</span></td>
-                        <td style={S.td}>{t.type==="dividend"||t.type==="deposit"||t.type==="withdraw"?"–":t.quantity}</td>
-                        <td style={S.td}>{t.type==="dividend"?fmt(t.dividendAmount,t.currency,2):t.type==="deposit"||t.type==="withdraw"?fmt(t.amount||0,t.currency,0):`${t.price} ${t.currency}`}</td>
+                        <td style={S.td}>{t.type==="dividend"?"–":t.quantity}</td>
+                        <td style={S.td}>{t.type==="dividend"?fmt(t.dividendAmount,t.currency,2):`${t.price} ${t.currency}`}</td>
                         <td style={S.td}>{t.fee?`${t.fee} ${t.currency}`:"–"}</td>
                         <td style={{ ...S.td, fontWeight:600 }}>{fmt(totalCZK,"CZK",0)}</td>
                         <td style={{ ...S.td, color:"#64748b" }}>{t.notes||"–"}</td>
@@ -3889,24 +3828,11 @@ export default function App() {
                 <div style={{ fontSize:10, color:"#475569", marginTop:6 }}>Kurzy se automaticky aktualizují každé 4 hodiny.</div>
               </div>
               <div style={S.card}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-                <div style={S.sectionTitle} >Ceny akcií</div>
-                <button style={{ ...S.btn("primary"), padding:"6px 14px", fontSize:11 }}
-                  onClick={() => {
-                    const tickers = [...new Set(activeTransactions.filter(t=>t.type==="buy").map(t=>t.ticker))].filter(t=>t&&!["VKLAD","VÝBĚR"].includes(t));
-                    fetchPrices(tickers);
-                  }} disabled={pricesStatus==="loading"}>
-                  {pricesStatus==="loading" ? "⟳ Načítám..." : "↻ Aktualizovat ceny z Yahoo"}
-                </button>
-              </div>
-              {pricesStatus==="ok" && <div style={{fontSize:11,color:"#22d3a0",marginBottom:10}}>✓ Ceny aktualizovány z Yahoo Finance</div>}
-              {pricesStatus==="error" && <div style={{fontSize:11,color:"#f87171",marginBottom:10}}>⚠ Nepodařilo se načíst ceny — zkontroluj internet</div>}
-              <div style={S.sectionTitle}>Ruční update cen</div>
+                <div style={S.sectionTitle}>Ruční update cen</div>
                 {Object.entries(prices).map(([ticker, data]) => (
                   <div key={ticker} style={{ display:"flex", gap:6, alignItems:"center", marginBottom:8 }}>
                     <div style={{ width:54, fontSize:12, fontWeight:600, color:"#f1f5f9" }}>{ticker}</div>
                     <input type="number" step="0.01" value={data.price} onChange={e=>setPrices(prev=>({...prev,[ticker]:{...prev[ticker],price:parseFloat(e.target.value)||0}}))} style={{ ...S.input, width:100 }}/>
-                    {data.lastUpdated && <span style={{fontSize:9,color:textMuted,whiteSpace:"nowrap"}}>{new Date(data.lastUpdated).toLocaleTimeString("cs-CZ",{hour:"2-digit",minute:"2-digit"})}</span>}
                     <span style={{ fontSize:11, color:"#475569", width:32 }}>{data.currency}</span>
                     <input type="number" step="0.01" value={data.change1d} onChange={e=>setPrices(prev=>({...prev,[ticker]:{...prev[ticker],change1d:parseFloat(e.target.value)||0}}))} style={{ ...S.input, width:65 }} placeholder="1D%"/>
                   </div>
@@ -4098,8 +4024,8 @@ export default function App() {
             </div>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
               {[
-                {label:"Typ",key:"type",type:"select",opts:[["buy","Nákup"],["sell","Prodej"],["dividend","Dividenda"],["deposit","Vklad"],["withdraw","Výběr"]],onChange:(v)=>{ if(v==="deposit"||v==="withdraw") setNewTx(p=>({...p,type:v,category:"cash",ticker:"",name:""})); else setNewTx(p=>({...p,type:v,category:p.category==="cash"?"stock":p.category})); }},
-                {label:"Kategorie",key:"category",type:"select",opts:[["stock","Akcie"],["etf","ETF"],["crypto","Crypto"],["cash","Hotovost"]]},
+                {label:"Typ",key:"type",type:"select",opts:[["buy","Nákup"],["sell","Prodej"],["dividend","Dividenda"],["deposit","Vklad"],["withdraw","Výběr"]]},
+                {label:"Kategorie",key:"category",type:"select",opts:[["stock","Akcie"],["etf","ETF"],["crypto","Crypto"]]},
                 ...(newTx.type!=="deposit"&&newTx.type!=="withdraw"?[
                   {label:"Ticker",key:"ticker",type:"text",placeholder:"AAPL"},
                   {label:"Název",key:"name",type:"text",placeholder:"Apple Inc."},
@@ -4121,8 +4047,8 @@ export default function App() {
                 <div key={f.key} style={f.span?{gridColumn:"1/-1"}:{}}>
                   <div style={{ fontSize:11, color:"#475569", marginBottom:5 }}>{f.label}</div>
                   {f.type==="select"
-                    ?<select value={newTx[f.key]} onChange={e=>{ if(f.onChange) f.onChange(e.target.value); else setNewTx(p=>({...p,[f.key]:e.target.value})); }} style={S.select}>{f.opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
-                    :<input type={f.type} placeholder={f.placeholder} value={newTx[f.key]||""} onChange={e=>setNewTx(p=>({...p,[f.key]:e.target.value}))} style={S.input}/>}
+                    ?<select value={newTx[f.key]} onChange={e=>setNewTx(p=>({...p,[f.key]:e.target.value}))} style={S.select}>{f.opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
+                    :<input type={f.type} placeholder={f.placeholder} value={newTx[f.key]} onChange={e=>setNewTx(p=>({...p,[f.key]:e.target.value}))} style={S.input}/>}
                 </div>
               ))}
             </div>
