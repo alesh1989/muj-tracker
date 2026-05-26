@@ -1157,14 +1157,14 @@ function NewsTab({ portfolio, S }) {
 
 
 // ─── MINI SVG LINE/BAR CHART ─────────────────────────────────────────────────
-const MiniChart = ({ data, type="bar", color="#6c63ff", label="", unit="", height=140, darkMode=true }) => {
+const MiniChart = ({ data, type="bar", color="#6c63ff", label="", unit="", height=110, darkMode=true }) => {
   const [tooltip, setTooltip] = useState(null); // {x, y, label, value}
 
   if (!data || data.length < 2) return <div style={{color:"#475569",fontSize:11,padding:20,textAlign:"center"}}>Nedostatek dat</div>;
   const vals = data.map(d => d.value);
   const min = Math.min(...vals, 0); const max = Math.max(...vals, 0.001);
   const range = max - min || 1;
-  const w = 440, h = height, pad = { t:48, b:36, l:58, r:12 }; // t:48 = room for tooltip
+  const w = 440, h = height, pad = { t:12, b:36, l:58, r:12 };
   const iW = w-pad.l-pad.r, iH = h-pad.t-pad.b;
   const xS = i => pad.l + (i/(data.length-1||1))*iW;
   const yS = v => pad.t + iH - ((v-min)/range)*iH;
@@ -1196,21 +1196,23 @@ const MiniChart = ({ data, type="bar", color="#6c63ff", label="", unit="", heigh
 
   return (
     <div style={{background:bg, borderRadius:12, padding:"8px 4px", overflowX:"auto", position:"relative"}}>
-      {/* Tooltip — always visible, positioned inside chart */}
+      {/* Tooltip */}
       {tooltip && (
         <div style={{
           position:"absolute", pointerEvents:"none", zIndex:50,
-          left: "50%", top: 4,
+          left: tooltip.px, top: tooltip.py - 52,
           transform:"translateX(-50%)",
           background:tooltipBg, border:`1px solid ${tooltipBorder}`,
-          borderRadius:10, padding:"7px 16px", whiteSpace:"nowrap",
-          boxShadow:"0 6px 20px rgba(0,0,0,0.4)",
-          display:"flex", alignItems:"center", gap:10,
+          borderRadius:8, padding:"6px 12px", whiteSpace:"nowrap",
+          boxShadow:"0 4px 16px rgba(0,0,0,0.3)",
         }}>
-          <span style={{fontSize:11,color:labelColor,fontWeight:700}}>{tooltip.label}</span>
-          <span style={{fontSize:14,color:tooltip.value>=0?color:"#f87171",fontWeight:800,letterSpacing:"0.02em"}}>
+          <div style={{fontSize:11,color:labelColor,fontWeight:600,marginBottom:2}}>{tooltip.label}</div>
+          <div style={{fontSize:13,color:tooltip.value>=0?color:"#f87171",fontWeight:800}}>
             {fmtV(tooltip.value)}{unit}
-          </span>
+          </div>
+          <div style={{position:"absolute",bottom:-5,left:"50%",transform:"translateX(-50%)",
+            width:8,height:8,background:tooltipBg,border:`1px solid ${tooltipBorder}`,
+            borderTop:"none",borderLeft:"none",transform:"translateX(-50%) rotate(45deg)"}}/>
         </div>
       )}
       <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",minWidth:280,height:"auto",overflow:"visible"}}
@@ -1559,16 +1561,16 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
           {activeChart==="revenue" && (
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <ChartCard title="Revenue — tržby (mld. USD)" desc="Celkové roční tržby">
-                <MiniChart data={mkData("revenue")} type="bar" color="#6366f1" label="rv" height={165}/>
+                <MiniChart data={mkData("revenue")} type="bar" color="#6366f1" label="rv" height={120}/>
               </ChartCard>
               <ChartCard title="EBITDA (mld. USD)" desc="Zisk před úroky, daněmi, odpisy a amortizací">
-                <MiniChart data={mkData("ebitda")} type="bar" color="#3b82f6" label="eb" height={165}/>
+                <MiniChart data={mkData("ebitda")} type="bar" color="#3b82f6" label="eb" height={120}/>
               </ChartCard>
               <ChartCard title="Net Income — čistý zisk (mld. USD)" desc="Zisk po zdanění">
-                <MiniChart data={mkData("netIncome")} type="combo" color="#10b981" label="ni" height={165}/>
+                <MiniChart data={mkData("netIncome")} type="combo" color="#10b981" label="ni" height={120}/>
               </ChartCard>
               <ChartCard title="Hrubá marže (%)" desc="Gross Margin — efektivita výroby/prodeje">
-                <MiniChart data={mkData("grossMargin")} type="line" color="#f59e0b" label="gm" unit="%" height={165}/>
+                <MiniChart data={mkData("grossMargin")} type="line" color="#f59e0b" label="gm" unit="%" height={120}/>
               </ChartCard>
             </div>
           )}
@@ -1577,16 +1579,16 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
           {activeChart==="profit" && (
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <ChartCard title="EPS — zisk na akcii (USD)" desc="Earnings Per Share — klíčový ukazatel růstu">
-                <MiniChart data={mkData("eps")} type="combo" color="#f59e0b" label="eps" height={155}/>
+                <MiniChart data={mkData("eps")} type="combo" color="#f59e0b" label="eps" height={130}/>
               </ChartCard>
               <ChartCard title="ROE — výnosnost vlastního kapitálu (%)" desc="Return on Equity — Buffett požaduje > 15%">
-                <MiniChart data={mkData("roe")} type="line" color="#8b5cf6" label="roe" unit="%" height={155}/>
+                <MiniChart data={mkData("roe")} type="line" color="#8b5cf6" label="roe" unit="%" height={130}/>
               </ChartCard>
               <ChartCard title="Provozní marže (%)" desc="Operating Margin — zisk z core businessu">
-                <MiniChart data={mkData("operatingMargin")} type="line" color="#6366f1" label="om" unit="%" height={155}/>
+                <MiniChart data={mkData("operatingMargin")} type="line" color="#6366f1" label="om" unit="%" height={130}/>
               </ChartCard>
               <ChartCard title="Čistá marže (%)" desc="Net Margin — kolik centů ze $1 tržeb zůstane">
-                <MiniChart data={mkData("netMargin")} type="line" color="#10b981" label="nm" unit="%" height={155}/>
+                <MiniChart data={mkData("netMargin")} type="line" color="#10b981" label="nm" unit="%" height={130}/>
               </ChartCard>
             </div>
           )}
@@ -1595,7 +1597,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
           {activeChart==="cashflow" && (
             <div>
               <ChartCard title="Free Cash Flow (mld. USD)" desc="Volný peněžní tok — peníze které firma skutečně generuje po investicích. Nejdůležitější ukazatel pro DCF ocenění.">
-                <MiniChart data={mkData("freeCashFlow")} type="combo" color="#10b981" label="fcf" height={165}/>
+                <MiniChart data={mkData("freeCashFlow")} type="combo" color="#10b981" label="fcf" height={150}/>
               </ChartCard>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
                 <ChartCard title="FCF vs Net Income porovnání" desc="Ideálně by FCF měl být blízký nebo vyšší než Net Income">
@@ -1625,7 +1627,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
                     label:y.toString().slice(2),
                     value: data.marketCap&&data.freeCashFlow?.[i]
                       ? (data.freeCashFlow[i]/data.marketCap)*100 : null
-                  })).filter(d=>d.value!==null)} type="line" color="#f59e0b" label="fcfy" unit="%" height={165}/>
+                  })).filter(d=>d.value!==null)} type="line" color="#f59e0b" label="fcfy" unit="%" height={120}/>
                 </ChartCard>
               </div>
             </div>
@@ -1643,14 +1645,14 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
                     label:y.toString().slice(2),
                     value: data.eps?.[i]&&data.eps[i]>0&&data.dividendPerShare?.[i]
                       ? (data.dividendPerShare[i]/data.eps[i])*100 : null
-                  })).filter(d=>d.value!==null)} type="line" color="#ec4899" label="pr" unit="%" height={165}/>
+                  })).filter(d=>d.value!==null)} type="line" color="#ec4899" label="pr" unit="%" height={120}/>
                 </ChartCard>
                 <ChartCard title="Roční růst dividendy (%)" desc="Dividend Growth Rate — čím vyšší a konzistentnější, tím lepší">
                   <MiniChart data={(data.years||[]).map((y,i)=>({
                     label:y.toString().slice(2),
                     value: i>0&&data.dividendPerShare?.[i-1]>0
                       ? ((data.dividendPerShare[i]-data.dividendPerShare[i-1])/data.dividendPerShare[i-1])*100 : null
-                  })).filter(d=>d.value!==null)} type="combo" color="#10b981" label="dgr" unit="%" height={165}/>
+                  })).filter(d=>d.value!==null)} type="combo" color="#10b981" label="dgr" unit="%" height={120}/>
                 </ChartCard>
               </div>
             </div>
@@ -1685,13 +1687,13 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
                   <MiniChart data={(data.years||[]).map((y,i)=>({
                     label:y.toString().slice(2),
                     value:(data.totalDebt?.[i]||0)-(data.cashAndEquivalents?.[i]||0)
-                  }))} type="combo" color="#f59e0b" label="nd" height={165}/>
+                  }))} type="combo" color="#f59e0b" label="nd" height={120}/>
                 </ChartCard>
                 <ChartCard title="Debt/EBITDA poměr" desc="Počet let na splacení dluhu z EBITDA. Ideálně < 3x">
                   <MiniChart data={(data.years||[]).map((y,i)=>({
                     label:y.toString().slice(2),
                     value:data.ebitda?.[i]>0?((data.totalDebt?.[i]||0)/data.ebitda[i]):null
-                  })).filter(d=>d.value!==null)} type="line" color="#ef4444" label="de" unit="x" height={165}/>
+                  })).filter(d=>d.value!==null)} type="line" color="#ef4444" label="de" unit="x" height={120}/>
                 </ChartCard>
               </div>
             </div>
@@ -1701,7 +1703,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
           {activeChart==="shares" && (
             <div>
               <ChartCard title="Počet akcií v oběhu (mld.)" desc="Klesající počet = buyback (firma vykupuje vlastní akcie = pozitivní pro akcionáře). Rostoucí = ředění (dilution = negativní).">
-                <MiniChart data={mkData("sharesOutstanding")} type="combo" color="#6366f1" label="sh" height={165}/>
+                <MiniChart data={mkData("sharesOutstanding")} type="combo" color="#6366f1" label="sh" height={150}/>
               </ChartCard>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
                 <ChartCard title="Roční změna počtu akcií (%)" desc="Záporné = buyback (dobré), kladné = dilution (pozor!)">
@@ -1709,13 +1711,13 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
                     label:y.toString().slice(2),
                     value:i>0&&data.sharesOutstanding?.[i-1]>0
                       ?((data.sharesOutstanding[i]-data.sharesOutstanding[i-1])/data.sharesOutstanding[i-1])*100:null
-                  })).filter(d=>d.value!==null)} type="combo" color="#10b981" label="sc" unit="%" height={165}/>
+                  })).filter(d=>d.value!==null)} type="combo" color="#10b981" label="sc" unit="%" height={120}/>
                 </ChartCard>
                 <ChartCard title="EPS růst — vliv buybacků" desc="Buybacky zvyšují EPS i bez růstu tržeb — sleduj zda roste EPS rychleji než Net Income">
                   <MiniChart data={(data.years||[]).map((y,i)=>({
                     label:y.toString().slice(2),
                     value:i>0&&data.eps?.[i-1]>0?((data.eps[i]-data.eps[i-1])/data.eps[i-1])*100:null
-                  })).filter(d=>d.value!==null)} type="combo" color="#f59e0b" label="eg" unit="%" height={165}/>
+                  })).filter(d=>d.value!==null)} type="combo" color="#f59e0b" label="eg" unit="%" height={120}/>
                 </ChartCard>
               </div>
             </div>
@@ -1725,25 +1727,25 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
           {activeChart==="valuation" && (
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <ChartCard title="P/E ratio" desc="Price/Earnings — valuační násobek. Vysoký P/E = trh očekává růst nebo je akcie drahá">
-                <MiniChart data={mkData("peRatio")} type="line" color="#f59e0b" label="pe" height={155}/>
+                <MiniChart data={mkData("peRatio")} type="line" color="#f59e0b" label="pe" height={130}/>
               </ChartCard>
               <ChartCard title="Price/FCF (Tržní cap / FCF)" desc="Levnější alternativa k P/E — ukazuje kolik platíš za $1 volného cash flow">
                 <MiniChart data={(data.years||[]).map((y,i)=>({
                   label:y.toString().slice(2),
                   value:data.freeCashFlow?.[i]>0?(data.marketCap/data.freeCashFlow[i]):null
-                })).filter(d=>d.value!==null)} type="line" color="#6366f1" label="pf" height={155}/>
+                })).filter(d=>d.value!==null)} type="line" color="#6366f1" label="pf" height={130}/>
               </ChartCard>
               <ChartCard title="Revenue na akcii (USD)" desc="Tržby na akcii — roste díky organickému růstu i buybackům">
                 <MiniChart data={(data.years||[]).map((y,i)=>({
                   label:y.toString().slice(2),
                   value:data.sharesOutstanding?.[i]>0?(data.revenue?.[i]/data.sharesOutstanding[i]):null
-                })).filter(d=>d.value!==null)} type="line" color="#10b981" label="rs" height={155}/>
+                })).filter(d=>d.value!==null)} type="line" color="#10b981" label="rs" height={130}/>
               </ChartCard>
               <ChartCard title="EBITDA marže (%)" desc="EBITDA / Revenue — provozní výkonnost před finančními náklady">
                 <MiniChart data={(data.years||[]).map((y,i)=>({
                   label:y.toString().slice(2),
                   value:data.revenue?.[i]>0?(data.ebitda?.[i]/data.revenue[i])*100:null
-                })).filter(d=>d.value!==null)} type="line" color="#8b5cf6" label="em" unit="%" height={155}/>
+                })).filter(d=>d.value!==null)} type="line" color="#8b5cf6" label="em" unit="%" height={130}/>
               </ChartCard>
             </div>
           )}
@@ -1783,10 +1785,10 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
               </ChartCard>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
                 <ChartCard title="Hrubá marže (%)" desc="Gross Margin">
-                  <MiniChart data={mkData("grossMargin")} type="line" color="#6366f1" label="gm2" unit="%" height={145}/>
+                  <MiniChart data={mkData("grossMargin")} type="line" color="#6366f1" label="gm2" unit="%" height={110}/>
                 </ChartCard>
                 <ChartCard title="Čistá marže (%)" desc="Net Margin">
-                  <MiniChart data={mkData("netMargin")} type="line" color="#f59e0b" label="nm2" unit="%" height={145}/>
+                  <MiniChart data={mkData("netMargin")} type="line" color="#f59e0b" label="nm2" unit="%" height={110}/>
                 </ChartCard>
               </div>
             </div>
