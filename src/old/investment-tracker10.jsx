@@ -2808,10 +2808,10 @@ export default function App() {
   };
 
   const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b" };
-  const catLabel = { stock:t.stocks, etf:t.etf, crypto:t.crypto };
+  const catLabel = { stock:"Akcie", etf:"ETF", crypto:"Crypto" };
 
   const TABS = ["dashboard","portfolio","transakce","cashflow","dividendy","novinky","analyza","fi","nastaveni"];
-  const TAB_LABELS = { dashboard:t.dashboard, portfolio:t.portfolio, transakce:t.transakce, cashflow:t.cashflow, dividendy:t.dividendy, novinky:t.novinky, analyza:t.analyza, fi:t.fi, nastaveni:t.nastaveni };
+  const TAB_LABELS = { dashboard:"Přehled", portfolio:"Portfolio", transakce:"Transakce", cashflow:"Vklady/Výběry", dividendy:"Dividendy", novinky:"Novinky", analyza:"Analýza", fi:"FI Kalkulačka", nastaveni:"Nastavení" };
   const filtered = filterCat === "all" ? portfolio.positions : portfolio.positions.filter(p => p.category === filterCat);
 
   // ─── MOBILE DETECTION ────────────────────────────────────────────────────
