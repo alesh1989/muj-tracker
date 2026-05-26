@@ -1841,291 +1841,8 @@ function AnalyzaTab({ rates, S }) {
   );
 }
 
-
-// ─── AUTH CONTEXT & COMPONENTS ───────────────────────────────────────────────
-
-// Login / Register screen
-function AuthScreen({ onAuth }) {
-  const [mode, setMode] = useState("login"); // login | register
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-
-  const darkBg = "#13192b";
-  const card = "#161d30";
-  const accent = "#6c63ff";
-  const text = "#e8f0fe";
-  const muted = "#5a7399";
-  const border = "rgba(255,255,255,0.07)";
-  const nmShadow = "8px 8px 20px #0b1020, -5px -5px 14px #1e2a45";
-  const nmInset = "inset 3px 3px 8px #0b1020, inset -3px -3px 8px #1e2a45";
-
-  const handle = async () => {
-    setLoading(true); setError(""); setSuccess("");
-    try {
-      if (mode === "login") {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-        // Check approved
-        const { data: profile } = await supabase.from("user_profiles").select("approved,role,display_name").eq("id", data.user.id).single();
-        if (!profile?.approved) {
-          await supabase.auth.signOut();
-          throw new Error("Váš účet čeká na schválení administrátorem.");
-        }
-        onAuth(data.user, profile);
-      } else {
-        const { data, error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
-        // Update display name
-        if (name) await supabase.from("user_profiles").update({ display_name: name }).eq("id", data.user.id);
-        setSuccess("Účet vytvořen! Počkejte na schválení administrátorem.");
-        setMode("login");
-      }
-    } catch(e) {
-      const msg = e.message || "";
-      if (msg.includes("Invalid login")) setError("Špatný email nebo heslo.");
-      else if (msg.includes("already registered")) setError("Tento email je již zaregistrován.");
-      else setError(msg);
-    }
-    setLoading(false);
-  };
-
-  const inp = { width:"100%", boxSizing:"border-box", background:card, border:`1px solid ${border}`,
-    borderRadius:12, color:text, padding:"12px 16px", fontSize:13,
-    fontFamily:"inherit", boxShadow:nmInset, outline:"none", marginBottom:12 };
-
-  return (
-    <div style={{ minHeight:"100vh", background:darkBg, display:"flex", alignItems:"center",
-      justifyContent:"center", fontFamily:"'IBM Plex Mono','Courier New',monospace", padding:20 }}>
-      <div style={{ width:"100%", maxWidth:400 }}>
-        {/* Logo */}
-        <div style={{ textAlign:"center", marginBottom:32 }}>
-          <div style={{ fontSize:28, fontWeight:800, color:accent, letterSpacing:"0.15em", marginBottom:6 }}>📈 INVESTTRACK</div>
-          <div style={{ fontSize:11, color:muted, letterSpacing:"0.08em" }}>Správa investičního portfolia</div>
-        </div>
-
-        {/* Card */}
-        <div style={{ background:card, borderRadius:20, padding:32, boxShadow:nmShadow, border:`1px solid ${border}` }}>
-          {/* Tab switch */}
-          <div style={{ display:"flex", background:darkBg, borderRadius:12, padding:4, marginBottom:24, boxShadow:nmInset }}>
-            {[["login","Přihlásit se"],["register","Registrace"]].map(([m,l])=>(
-              <button key={m} style={{ flex:1, padding:"9px", border:"none", borderRadius:10, cursor:"pointer",
-                fontFamily:"inherit", fontSize:11, fontWeight:700, letterSpacing:"0.05em",
-                background: mode===m ? `linear-gradient(135deg,#5b52f0,${accent})` : "transparent",
-                color: mode===m ? "#fff" : muted,
-                boxShadow: mode===m ? "0 4px 12px rgba(108,99,255,0.4)" : "none",
-                transition:"all 0.2s" }}
-                onClick={()=>{ setMode(m); setError(""); setSuccess(""); }}>
-                {l}
-              </button>
-            ))}
-          </div>
-
-          {mode==="register" && (
-            <input value={name} onChange={e=>setName(e.target.value)} placeholder="Jméno (volitelné)"
-              style={inp} type="text"/>
-          )}
-          <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email"
-            style={inp} type="email" onKeyDown={e=>e.key==="Enter"&&handle()}/>
-          <input value={password} onChange={e=>setPassword(e.target.value)} placeholder="Heslo"
-            style={{...inp, marginBottom:20}} type="password" onKeyDown={e=>e.key==="Enter"&&handle()}/>
-
-          {error && <div style={{ color:"#f87171", fontSize:12, marginBottom:14, padding:"8px 12px",
-            background:"#f8717118", borderRadius:8, border:"1px solid #f8717133" }}>{error}</div>}
-          {success && <div style={{ color:"#22d3a0", fontSize:12, marginBottom:14, padding:"8px 12px",
-            background:"#22d3a018", borderRadius:8, border:"1px solid #22d3a033" }}>{success}</div>}
-
-          <button onClick={handle} disabled={loading} style={{ width:"100%", padding:"13px",
-            background:`linear-gradient(135deg,#5b52f0,${accent})`, color:"#fff", border:"none",
-            borderRadius:12, cursor:"pointer", fontSize:13, fontFamily:"inherit", fontWeight:700,
-            letterSpacing:"0.06em", boxShadow:"0 6px 20px rgba(108,99,255,0.4)", transition:"all 0.2s",
-            opacity: loading ? 0.7 : 1 }}>
-            {loading ? "⟳ Načítám..." : mode==="login" ? "Přihlásit se" : "Vytvořit účet"}
-          </button>
-        </div>
-
-        <div style={{ textAlign:"center", marginTop:20, fontSize:10, color:"#2d3f5a" }}>
-          Bezpečné přihlášení přes Supabase Auth
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Admin panel
-function AdminPanel({ currentUser, onClose, S }) {
-  const [users, setUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [invitePass, setInvitePass] = useState("");
-  const [inviteName, setInviteName] = useState("");
-  const [msg, setMsg] = useState("");
-
-  const loadUsers = async () => {
-    setLoading(true);
-    const { data } = await supabase.from("user_profiles").select("*").order("created_at");
-    setUsers(data || []);
-    setLoading(false);
-  };
-
-  useEffect(()=>{ loadUsers(); }, []);
-
-  const approve = async (id, val) => {
-    await supabase.from("user_profiles").update({ approved: val }).eq("id", id);
-    loadUsers();
-  };
-
-  const setRole = async (id, role) => {
-    await supabase.from("user_profiles").update({ role }).eq("id", id);
-    loadUsers();
-  };
-
-  const createUser = async () => {
-    if (!inviteEmail || !invitePass) return;
-    setMsg("Vytvářím uživatele...");
-    try {
-      // Create via admin API through our proxy
-      const res = await fetch("/api/admin-create-user", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ email: inviteEmail, password: invitePass, name: inviteName })
-      });
-      const d = await res.json();
-      if (d.error) throw new Error(d.error);
-      setMsg(`✓ Uživatel ${inviteEmail} vytvořen a schválen.`);
-      setInviteEmail(""); setInvitePass(""); setInviteName("");
-      loadUsers();
-    } catch(e) { setMsg("Chyba: " + e.message); }
-  };
-
-  const deleteUser = async (id, email) => {
-    if (!window.confirm(`Smazat uživatele ${email}? Tato akce je nevratná.`)) return;
-    // Delete all user data
-    await supabase.from("transactions").delete().eq("user_id", id);
-    await supabase.from("portfolios").delete().eq("user_id", id);
-    await supabase.from("user_profiles").delete().eq("id", id);
-    setMsg(`Uživatel ${email} smazán.`);
-    loadUsers();
-  };
-
-  const roleColor = { admin:"#6c63ff", user:"#22d3a0" };
-
-  return (
-    <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={{...S.modalBox, maxWidth:680}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-          <div style={{fontSize:15,fontWeight:800,color:"#e8f0fe"}}>👥 Admin panel — správa uživatelů</div>
-          <button style={{...S.btn("outline"),padding:"4px 10px"}} onClick={onClose}>✕</button>
-        </div>
-
-        {/* Create user */}
-        <div style={{...S.card,marginBottom:16}}>
-          <div style={S.sectionTitle}>Přidat nového uživatele</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr auto",gap:8}}>
-            <div>
-              <div style={{fontSize:10,color:"#5a7399",marginBottom:4}}>Jméno</div>
-              <input value={inviteName} onChange={e=>setInviteName(e.target.value)} placeholder="Jan Novák" style={S.input}/>
-            </div>
-            <div>
-              <div style={{fontSize:10,color:"#5a7399",marginBottom:4}}>Email</div>
-              <input value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} placeholder="jan@email.cz" style={S.input} type="email"/>
-            </div>
-            <div>
-              <div style={{fontSize:10,color:"#5a7399",marginBottom:4}}>Heslo</div>
-              <input value={invitePass} onChange={e=>setInvitePass(e.target.value)} placeholder="min. 6 znaků" style={S.input} type="password"/>
-            </div>
-            <div style={{display:"flex",alignItems:"flex-end"}}>
-              <button style={S.btn("primary")} onClick={createUser}>+ Přidat</button>
-            </div>
-          </div>
-          {msg && <div style={{marginTop:10,fontSize:11,color:msg.startsWith("✓")?"#22d3a0":"#f87171"}}>{msg}</div>}
-        </div>
-
-        {/* User list */}
-        <div style={S.card}>
-          <div style={S.sectionTitle}>Uživatelé ({users.length})</div>
-          {loading ? <div style={{color:"#5a7399",fontSize:12}}>Načítám...</div> : (
-            <table style={S.table}>
-              <thead><tr>
-                {["Jméno","Email","Role","Schválen","Registrace",""].map(h=><th key={h} style={S.th}>{h}</th>)}
-              </tr></thead>
-              <tbody>
-                {users.map(u=>(
-                  <tr key={u.id}>
-                    <td style={S.td}>{u.display_name||"–"}</td>
-                    <td style={S.td}>{u.email}</td>
-                    <td style={S.td}>
-                      <select value={u.role} disabled={u.id===currentUser.id}
-                        onChange={e=>setRole(u.id,e.target.value)}
-                        style={{...S.select,width:"auto",padding:"3px 8px",fontSize:10,
-                          color:roleColor[u.role]||"#94a3b8"}}>
-                        <option value="user">User</option>
-                        <option value="admin">Admin</option>
-                      </select>
-                    </td>
-                    <td style={S.td}>
-                      {u.id===currentUser.id
-                        ? <span style={{color:"#22d3a0",fontSize:11}}>✓ (ty)</span>
-                        : <button style={{...S.btn(u.approved?"outline":"primary"),padding:"3px 10px",fontSize:10}}
-                            onClick={()=>approve(u.id,!u.approved)}>
-                            {u.approved?"✓ Schválen":"✕ Neschválen"}
-                          </button>
-                      }
-                    </td>
-                    <td style={{...S.td,color:"#5a7399",fontSize:11}}>{new Date(u.created_at).toLocaleDateString("cs-CZ")}</td>
-                    <td style={S.td}>
-                      {u.id!==currentUser.id && (
-                        <button style={{...S.btn("danger"),padding:"3px 8px",fontSize:10}}
-                          onClick={()=>deleteUser(u.id,u.email)}>🗑</button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
-  // ─── AUTH STATE ────────────────────────────────────────────────────────
-  const [authUser, setAuthUser] = useState(null);   // Supabase user object
-  const [userProfile, setUserProfile] = useState(null); // {role, display_name, approved}
-  const [authLoading, setAuthLoading] = useState(true);
-  const [showAdmin, setShowAdmin] = useState(false);
-
-  // Check session on mount
-  useEffect(() => {
-    const check = async () => {
-      if (!supabase) { setAuthLoading(false); return; }
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        const { data: profile } = await supabase.from("user_profiles")
-          .select("approved,role,display_name").eq("id", session.user.id).single();
-        if (profile?.approved) {
-          setAuthUser(session.user);
-          setUserProfile(profile);
-        } else {
-          await supabase.auth.signOut();
-        }
-      }
-      setAuthLoading(false);
-    };
-    check();
-    // Listen for auth changes
-    const { data: { subscription } } = supabase?.auth.onAuthStateChange(async (event, session) => {
-      if (event === "SIGNED_OUT") { setAuthUser(null); setUserProfile(null); }
-    }) || { data: { subscription: { unsubscribe: ()=>{} } } };
-    return () => subscription?.unsubscribe();
-  }, []);
-
   // ─── MULTI-PORTFOLIO STATE ─────────────────────────────────────────────
   const [portfolios, setPortfolios] = useState(DEFAULT_PORTFOLIOS);
   const [activePortfolioId, setActivePortfolioId] = useState("p1");
@@ -2154,160 +1871,113 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(true);
   const [fontSize, setFontSize] = useState(13); // 11-17
 
-  // ─── PERSIST — per-user Supabase tables + localStorage fallback ──────────
+  // ─── PERSIST — localStorage + Supabase sync ──────────────────────────────
+  // Load: Supabase má přednost, localStorage jako fallback
   useEffect(() => {
-    if (authLoading) return; // wait for auth check
     const load = async () => {
-      const uid = authUser?.id;
-      const lsKey = uid ? `user_${uid}` : "guest";
-
-      // 1. localStorage (okamžité zobrazení)
+      // 1. Nejdřív načti z localStorage (okamžité zobrazení)
       try {
-        const tx = localStorage.getItem(`${lsKey}_tx`);
-        const po = localStorage.getItem(`${lsKey}_portfolios`);
-        const ap = localStorage.getItem(`${lsKey}_activePortfolio`);
-        const di = localStorage.getItem(`${lsKey}_dividends`);
-        const ea = localStorage.getItem(`${lsKey}_earnings`);
-        const fi = localStorage.getItem(`${lsKey}_fi`);
+        const tx = localStorage.getItem("inv_transactions");
+        const pr = localStorage.getItem("inv_prices");
+        const ra = localStorage.getItem("inv_rates");
+        const di = localStorage.getItem("inv_dividends");
+        const ea = localStorage.getItem("inv_earnings");
+        const fi = localStorage.getItem("inv_fiSettings");
+        const po = localStorage.getItem("inv_portfolios");
+        const ap = localStorage.getItem("inv_activePortfolioId");
         if (tx) setTransactions(JSON.parse(tx));
-        if (po) setPortfolios(JSON.parse(po));
-        if (ap) setActivePortfolioId(JSON.parse(ap));
+        if (pr) setPrices(JSON.parse(pr));
+        if (ra) setRates(JSON.parse(ra));
         if (di) setDividends(JSON.parse(di));
         if (ea) setEarnings(JSON.parse(ea));
         if (fi) setFiSettings(JSON.parse(fi));
+        if (po) setPortfolios(JSON.parse(po));
+        if (ap) setActivePortfolioId(JSON.parse(ap));
         const dm = localStorage.getItem("inv_darkMode");
         const fs = localStorage.getItem("inv_fontSize");
         if (dm !== null) setDarkMode(JSON.parse(dm));
         if (fs !== null) setFontSize(JSON.parse(fs));
       } catch {}
 
-      if (!supabase || !uid) { setLoaded(true); setSyncStatus("offline"); return; }
-
-      setSyncStatus("syncing");
-      try {
-        // Load user transactions from new per-user table
-        const [txRes, portRes, divRes, earRes, fiRes, ratesRes, pricesRes] = await Promise.all([
-          supabase.from("transactions").select("*").eq("user_id", uid).order("date"),
-          supabase.from("portfolios").select("*").eq("user_id", uid).order("created_at"),
-          supabase.from("user_dividends").select("data").eq("user_id", uid).single(),
-          supabase.from("user_earnings").select("data").eq("user_id", uid).single(),
-          supabase.from("user_fi_settings").select("data").eq("user_id", uid).single(),
-          supabase.from("shared_data").select("data").eq("id", "rates").single(),
-          supabase.from("shared_data").select("data").eq("id", "prices").single(),
-        ]);
-
-        // Transactions
-        if (txRes.data?.length) {
-          const txs = txRes.data.map(t => ({
-            id: t.id, portfolioId: t.portfolio_id, type: t.type,
-            ticker: t.ticker, name: t.name, category: t.category,
-            date: t.date, quantity: t.quantity, price: t.price,
-            currency: t.currency, fee: t.fee,
-            dividendAmount: t.dividend_amount, amount: t.amount, notes: t.notes
-          }));
-          setTransactions(txs);
-          localStorage.setItem(`${lsKey}_tx`, JSON.stringify(txs));
-        }
-        // Portfolios
-        if (portRes.data?.length) {
-          const ports = portRes.data.map(p => ({ id: p.id, name: p.name, color: p.color, created: p.created_at?.slice(0,10) }));
-          setPortfolios(ports);
-          setActivePortfolioId(ports[0].id);
-          localStorage.setItem(`${lsKey}_portfolios`, JSON.stringify(ports));
-        }
-        if (divRes.data?.data) setDividends(divRes.data.data);
-        if (earRes.data?.data) setEarnings(earRes.data.data);
-        if (fiRes.data?.data && Object.keys(fiRes.data.data).length) setFiSettings(fiRes.data.data);
-        // Shared rates & prices
-        if (ratesRes.data?.data && Object.keys(ratesRes.data.data).length) setRates(ratesRes.data.data);
-        if (pricesRes.data?.data && Object.keys(pricesRes.data.data).length) setPrices(pricesRes.data.data);
-
-        setSyncStatus("ok");
-      } catch(e) { console.error(e); setSyncStatus("error"); }
+      // 2. Pokud je Supabase nakonfigurováno, načti z cloudu (přepíše localStorage)
+      if (supabase) {
+        setSyncStatus("syncing");
+        try {
+          const { data, error } = await supabase
+            .from("portfolio_data")
+            .select("data")
+            .eq("id", "main")
+            .single();
+          if (!error && data?.data && Object.keys(data.data).length > 0) {
+            const d = data.data;
+            if (d.transactions) { setTransactions(d.transactions); localStorage.setItem("inv_transactions", JSON.stringify(d.transactions)); }
+            if (d.prices)       { setPrices(d.prices);             localStorage.setItem("inv_prices",       JSON.stringify(d.prices)); }
+            if (d.rates)        { setRates(d.rates);               localStorage.setItem("inv_rates",        JSON.stringify(d.rates)); }
+            if (d.dividends)    { setDividends(d.dividends);       localStorage.setItem("inv_dividends",    JSON.stringify(d.dividends)); }
+            if (d.earnings)     { setEarnings(d.earnings);         localStorage.setItem("inv_earnings",     JSON.stringify(d.earnings)); }
+            if (d.fiSettings)   { setFiSettings(d.fiSettings);     localStorage.setItem("inv_fiSettings",   JSON.stringify(d.fiSettings)); }
+            if (d.portfolios)   { setPortfolios(d.portfolios);     localStorage.setItem("inv_portfolios",   JSON.stringify(d.portfolios)); }
+            if (d.activePortfolioId) { setActivePortfolioId(d.activePortfolioId); localStorage.setItem("inv_activePortfolioId", JSON.stringify(d.activePortfolioId)); }
+            setSyncStatus("ok");
+          } else {
+            setSyncStatus("ok");
+          }
+        } catch { setSyncStatus("error"); }
+      } else {
+        setSyncStatus("offline");
+      }
       setLoaded(true);
     };
     load();
-  }, [authUser, authLoading]);
+  }, []);
 
-  // ─── SAVE PER-USER DATA ───────────────────────────────────────────────────
+  // Debounced save — ukládá 1,5s po poslední změně aby nespamoval DB
   const saveTimerRef = useRef(null);
-  const saveUserData = useCallback(({ txs, ports, divs, ears, fi }) => {
-    if (!supabase || !authUser) return;
-    const uid = authUser.id;
-    const lsKey = `user_${uid}`;
-    if (txs !== undefined) { try { localStorage.setItem(`${lsKey}_tx`, JSON.stringify(txs)); } catch {} }
-    if (ports !== undefined) { try { localStorage.setItem(`${lsKey}_portfolios`, JSON.stringify(ports)); } catch {} }
-    if (divs !== undefined) { try { localStorage.setItem(`${lsKey}_dividends`, JSON.stringify(divs)); } catch {} }
-
+  const saveToCloud = useCallback((newData) => {
+    // Vždy ulož do localStorage okamžitě
+    Object.entries(newData).forEach(([k, v]) => {
+      try { localStorage.setItem(`inv_${k}`, JSON.stringify(v)); } catch {}
+    });
+    // Do Supabase s debounce
+    if (!supabase) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       setSyncStatus("syncing");
       try {
-        const ops = [];
-        // Save transactions: delete all + reinsert (simplest approach)
-        if (txs !== undefined) {
-          await supabase.from("transactions").delete().eq("user_id", uid);
-          if (txs.length > 0) {
-            const rows = txs.map(t => ({
-              id: t.id, user_id: uid, portfolio_id: t.portfolioId || ports?.[0]?.id || "p1",
-              type: t.type, ticker: t.ticker, name: t.name, category: t.category,
-              date: t.date, quantity: t.quantity||null, price: t.price||null,
-              currency: t.currency, fee: t.fee||null,
-              dividend_amount: t.dividendAmount||null, amount: t.amount||null, notes: t.notes||null
-            }));
-            ops.push(supabase.from("transactions").insert(rows));
-          }
-        }
-        // Save portfolios
-        if (ports !== undefined) {
-          await supabase.from("portfolios").delete().eq("user_id", uid);
-          if (ports.length > 0) {
-            ops.push(supabase.from("portfolios").insert(
-              ports.map(p => ({ id: p.id, user_id: uid, name: p.name, color: p.color }))
-            ));
-          }
-        }
-        // Dividends, earnings, fi as JSONB
-        if (divs !== undefined) ops.push(supabase.from("user_dividends").upsert({ id: uid, user_id: uid, data: divs }));
-        if (ears !== undefined) ops.push(supabase.from("user_earnings").upsert({ id: uid, user_id: uid, data: ears }));
-        if (fi !== undefined) ops.push(supabase.from("user_fi_settings").upsert({ id: uid, user_id: uid, data: fi }));
-        await Promise.all(ops);
-        setSyncStatus("ok");
-      } catch(e) { console.error("save error", e); setSyncStatus("error"); }
-    }, 1800);
-  }, [authUser]);
-
-  // Save shared rates+prices (admin only or anyone — rates are public)
-  const saveShared = useCallback(async (key, value) => {
-    if (!supabase) return;
-    try {
-      localStorage.setItem(`inv_${key}`, JSON.stringify(value));
-      await supabase.from("shared_data").upsert({ id: key, data: value, updated_at: new Date().toISOString() });
-    } catch {}
+        const { error } = await supabase
+          .from("portfolio_data")
+          .upsert({ id: "main", data: newData, updated_at: new Date().toISOString() });
+        setSyncStatus(error ? "error" : "ok");
+      } catch { setSyncStatus("error"); }
+    }, 1500);
   }, []);
 
-  // Sleduj změny
-  useEffect(() => { if (loaded && authUser) saveUserData({ txs: transactions }); }, [transactions, loaded]);
-  useEffect(() => { if (loaded && authUser) saveUserData({ ports: portfolios }); }, [portfolios, loaded]);
-  useEffect(() => { if (loaded && authUser) saveUserData({ divs: dividends }); }, [dividends, loaded]);
-  useEffect(() => { if (loaded && authUser) saveUserData({ ears: earnings }); }, [earnings, loaded]);
-  useEffect(() => { if (loaded && authUser) saveUserData({ fi: fiSettings }); }, [fiSettings, loaded]);
-  useEffect(() => { if (loaded) saveShared("rates", rates); }, [rates, loaded]);
-  useEffect(() => { if (loaded) saveShared("prices", prices); }, [prices, loaded]);
+  // Sleduj změny a ulož
+  useEffect(() => {
+    if (!loaded) return;
+    saveToCloud({ transactions, prices, rates, dividends, earnings, fiSettings, portfolios, activePortfolioId });
+  }, [transactions, prices, rates, dividends, earnings, fiSettings, loaded]);
 
   // Persist theme/fontSize locally (not synced to cloud)
   useEffect(() => { try { localStorage.setItem("inv_darkMode", JSON.stringify(darkMode)); } catch {} }, [darkMode]);
   useEffect(() => { try { localStorage.setItem("inv_fontSize", JSON.stringify(fontSize)); } catch {} }, [fontSize]);
 
-  // Realtime sync — shared rates/prices
+  // Realtime sync — při změně z jiného zařízení se data obnoví
   useEffect(() => {
     if (!supabase || !loaded) return;
     const channel = supabase
-      .channel("shared_changes")
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "shared_data" },
+      .channel("portfolio_changes")
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "portfolio_data", filter: "id=eq.main" },
         (payload) => {
-          if (payload.new?.id === "rates") setRates(payload.new.data);
-          if (payload.new?.id === "prices") setPrices(payload.new.data);
+          const d = payload.new?.data;
+          if (!d) return;
+          // Pouze přijmi pokud jsou data novější
+          if (d.transactions) setTransactions(d.transactions);
+          if (d.prices)       setPrices(d.prices);
+          if (d.dividends)    setDividends(d.dividends);
+          if (d.earnings)     setEarnings(d.earnings);
+          if (d.fiSettings)   setFiSettings(d.fiSettings);
+          setSyncStatus("ok");
         })
       .subscribe();
     return () => supabase.removeChannel(channel);
@@ -2578,21 +2248,9 @@ export default function App() {
   const TAB_LABELS = { dashboard:"Přehled", portfolio:"Portfolio", transakce:"Transakce", cashflow:"Vklady/Výběry", dividendy:"Dividendy", novinky:"Novinky", analyza:"Analýza", fi:"FI Kalkulačka", nastaveni:"Nastavení" };
   const filtered = filterCat === "all" ? portfolio.positions : portfolio.positions.filter(p => p.category === filterCat);
 
-  // Auth loading spinner
-  if (authLoading) return (
-    <div style={{ minHeight:"100vh", background:"#13192b", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"monospace" }}>
-      <div style={{ color:"#6c63ff", fontSize:13 }}>⟳ Ověřuji přihlášení...</div>
-    </div>
-  );
-
-  // Show login screen if not authenticated (and supabase is configured)
-  if (supabase && !authUser) return (
-    <AuthScreen onAuth={(user, profile) => { setAuthUser(user); setUserProfile(profile); }} />
-  );
-
   if (!loaded) return (
     <div style={{ ...S.app, display:"flex", alignItems:"center", justifyContent:"center", minHeight:"100vh" }}>
-      <div style={{ color:"#6c63ff" }}>Načítám data...</div>
+      <div style={{ color:"#6366f1" }}>Načítám data...</div>
     </div>
   );
 
@@ -2620,26 +2278,6 @@ export default function App() {
         <div style={S.navTop}>
           <div style={{ display:"flex", alignItems:"center", gap:12 }}>
             <div style={S.logo}>📈 INVESTTRACK</div>
-            {/* User badge */}
-            {authUser && (
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <div style={{ fontSize:10, padding:"4px 10px", borderRadius:8,
-                  background: userProfile?.role==="admin" ? "#6c63ff22" : "#22d3a018",
-                  color: userProfile?.role==="admin" ? "#6c63ff" : "#22d3a0",
-                  border: `1px solid ${userProfile?.role==="admin" ? "#6c63ff44" : "#22d3a044"}`,
-                  fontWeight:700 }}>
-                  {userProfile?.role==="admin" ? "⚡ Admin" : "👤 User"}
-                  {userProfile?.display_name ? ` · ${userProfile.display_name.split(" ")[0]}` : ""}
-                </div>
-                {userProfile?.role==="admin" && (
-                  <button style={{ ...S.btn("outline"), padding:"4px 10px", fontSize:10 }}
-                    onClick={()=>setShowAdmin(true)}>👥 Uživatelé</button>
-                )}
-                <button style={{ ...S.btn("outline"), padding:"4px 10px", fontSize:10 }}
-                  onClick={async ()=>{ await supabase?.auth.signOut(); setAuthUser(null); setUserProfile(null); setTransactions([]); setPortfolios(DEFAULT_PORTFOLIOS); setLoaded(false); }}
-                  title="Odhlásit se">⏻ Odhlásit</button>
-              </div>
-            )}
             {/* Portfolio switcher */}
             <div style={{ display:"flex", alignItems:"center", gap:6 }}>
               {portfolios.map(p => (
@@ -3720,11 +3358,6 @@ export default function App() {
             <button style={{...S.btn("outline"),width:"100%",marginTop:12}} onClick={()=>setShowDeleteAll(false)}>Zrušit</button>
           </div>
         </div>
-      )}
-
-      {/* ─── ADMIN PANEL ──────────────────────────────────────────────────── */}
-      {showAdmin && userProfile?.role==="admin" && (
-        <AdminPanel currentUser={authUser} onClose={()=>setShowAdmin(false)} S={S} />
       )}
 
       {/* ─── MODAL CSV IMPORT ──────────────────────────────────────────────── */}
