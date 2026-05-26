@@ -1058,8 +1058,8 @@ function NewsTab({ portfolio, S }) {
       {/* Filter bar */}
       <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"wrap" }}>
         {[
-          ["vse", `${t.all} (${news.length})`],
-          ["portfolio", `${t.myPortfolio} (${portfolioNews})`],
+          ["vse", `Vše (${news.length})`],
+          ["portfolio", `Moje portfolio (${portfolioNews})`],
           ...tickers.slice(0,8).map(t => [t, t]),
         ].map(([val, label]) => (
           <button key={val} style={{ ...S.btn(activeFilter===val?"primary":"outline"), padding:"5px 12px", fontSize:10 }}
@@ -1787,11 +1787,11 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
 
 
 // ─── ANALYZA TAB WRAPPER ──────────────────────────────────────────────────────
-function AnalyzaTab({ rates, S, t=T.cs, lang="cs" }) {
+function AnalyzaTab({ rates, S }) {
   const [subTab, setSubTab] = useState("fundamenty");
   const SUB = [
-    { id:"fundamenty", label:t.fundamentalCharts },
-    { id:"oceneni", label:t.valuation },
+    { id:"fundamenty", label:"📈 Fundamentální grafy" },
+    { id:"oceneni", label:"🔍 Ocenění (DCF/Graham)" },
   ];
   return (
     <>
@@ -1813,7 +1813,7 @@ function AnalyzaTab({ rates, S, t=T.cs, lang="cs" }) {
 // ─── AUTH CONTEXT & COMPONENTS ───────────────────────────────────────────────
 
 // Login / Register screen
-function AuthScreen({ onAuth, lang="cs", setLang }) {
+function AuthScreen({ onAuth }) {
   const [mode, setMode] = useState("login"); // login | register | reset
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1896,7 +1896,7 @@ function AuthScreen({ onAuth, lang="cs", setLang }) {
     borderRadius:12, color:text, padding:"12px 16px", fontSize:13,
     fontFamily:"inherit", boxShadow:nmInset, outline:"none", marginBottom:12 };
 
-  const TABS = [["login",T[lang]?.login||"Přihlásit se"],["register",T[lang]?.register||"Registrace"]];
+  const TABS = [["login","Přihlásit se"],["register","Registrace"]];
 
   return (
     <div style={{ minHeight:"100vh", background:darkBg, display:"flex", alignItems:"center",
@@ -1905,15 +1905,7 @@ function AuthScreen({ onAuth, lang="cs", setLang }) {
         {/* Logo */}
         <div style={{ textAlign:"center", marginBottom:32 }}>
           <div style={{ fontSize:28, fontWeight:800, color:accent, letterSpacing:"0.15em", marginBottom:6 }}>📈 INVESTTRACK</div>
-            {setLang && (
-              <button onClick={()=>setLang(l=>l==="cs"?"en":"cs")}
-                style={{ background:"none", border:`1px solid ${border}`, borderRadius:8,
-                  color:muted, cursor:"pointer", fontSize:11, fontFamily:"inherit",
-                  padding:"3px 12px", marginTop:6, fontWeight:700 }}>
-                {lang==="cs" ? "🇬🇧 EN" : "🇨🇿 CZ"}
-              </button>
-            )}
-          <div style={{ fontSize:11, color:muted, letterSpacing:"0.08em" }}>{T[lang]?.appSubtitle||T.cs.appSubtitle}</div>
+          <div style={{ fontSize:11, color:muted, letterSpacing:"0.08em" }}>Správa investičního portfolia</div>
         </div>
 
         <div style={{ background:card, borderRadius:20, padding:32, boxShadow:nmShadow, border:`1px solid ${border}` }}>
@@ -2155,179 +2147,6 @@ function AdminPanel({ currentUser, onClose, S }) {
     </div>
   );
 }
-
-
-// ─── TRANSLATIONS ─────────────────────────────────────────────────────────────
-const T = {
-  cs: {
-    // Nav tabs
-    dashboard:"Přehled", portfolio:"Portfolio", transakce:"Transakce",
-    cashflow:"Vklady/Výběry", dividendy:"Dividendy", novinky:"Novinky",
-    analyza:"Analýza", fi:"FI Kalkulačka", nastaveni:"Nastavení",
-    // Dashboard
-    currentValue:"Aktuální hodnota", invested:"Investováno",
-    gainLoss:"Zisk / Ztráta", dayChange:"Denní změna",
-    tested3y:"Prošlo 3L testem", dividendsReceived:"Přijaté dividendy",
-    portfolioYield:"Portfolio yield", yieldOnCost:"Yield on Cost",
-    annualDividends:"Roční dividendy",
-    portfolioGrowth:"Vývoj portfolia", allocation:"Alokace",
-    topPositions:"Top pozice (CZK)", annualReturns:"Roční výnosy",
-    upcomingDividends:"Nadcházející dividendy", upcomingEarnings:"Nadcházející earnings",
-    afterClose:"po zavření", beforeOpen:"před otevřením",
-    // Portfolio
-    positions:"Pozice portfolia", quantity:"Množství",
-    avgPrice:"Prům. cena", currentPrice:"Akt. cena",
-    valuesCZK:"Hodnota CZK", gainLossPct:"Zisk/Ztráta",
-    annualReturn:"Roční výnos", daily:"Denní %",
-    days:"Dnů", test3y:"3L test",
-    all:"Vše", stocks:"Akcie", etf:"ETF", crypto:"Crypto",
-    sortBy:"Řadit:", ascending:"↑ Vzestupně", descending:"↓ Sestupně",
-    // Transactions
-    transactions:"Historie transakcí", addTransaction:"+ Přidat",
-    importCsv:"📂 Import CSV", exportCsv:"📤 Export CSV",
-    deleteAll:"🗑 Smazat vše", autoDiv:"🤖 Auto-dividendy",
-    date:"Datum", type:"Typ", ticker:"Ticker", category:"Kategorie",
-    price:"Cena", fee:"Poplatek", totalCZK:"Celkem CZK", notes:"Poznámka",
-    buy:"Nákup", sell:"Prodej", dividend:"Dividenda",
-    deposit:"Vklad", withdraw:"Výběr",
-    // Cashflow
-    cashflowTitle:"Vklady & Výběry",
-    totalDeposits:"Celkové vklady", totalWithdraws:"Celkové výběry",
-    netDeposit:"Čistý vklad", roi:"ROI na vložený kapitál",
-    portfolioValue:"Aktuální hodnota portfolia", absoluteGain:"Absolutní zisk",
-    addDepositWithdraw:"+ Přidat vklad/výběr",
-    // Dividends
-    dividendCalendar:"Dividendový kalendář",
-    receivedYear:"Přijato", expectedEoy:"Očekáváno do konce roku",
-    totalYear:"Celkem", annualEst:"Roční odhad (4× kv.)",
-    monthlyOverview:"Měsíční přehled", received:"přijato", expected:"očekáváno",
-    upcomingPayments:"Nadcházející výplaty", earningsCalendar:"Earnings kalendář",
-    // News
-    newsTitle:"Novinky & Zprávy", updated:"Aktualizováno:", refresh:"↻ Aktualizovat",
-    myPortfolio:"Moje portfolio", noNews:"Žádné novinky", loadingNews:"Načítám novinky...",
-    readArticle:t.readArticle, myPortfolioTag:t.myPortfolioTag,
-    // Analysis
-    analysisTitle:"Analýza akcií", fundamentalCharts:"📈 Fundamentální grafy",
-    valuation:"🔍 Ocenění (DCF/Graham)",
-    loadCharts:"📊 Načíst grafy", loading:"⟳ Načítám...",
-    // FI
-    fiTitle:"Kalkulačka finanční nezávislosti",
-    fiParams:"Parametry FI", monthlyExpenses:"Měsíční výdaje (CZK)",
-    monthlyInvestment:"Měsíční investice (CZK)", annualReturn2:"Očekávaný roční výnos (%)",
-    swr:"Bezpečná míra výběru / SWR (%)", fiNumber:"FI číslo (cíl):",
-    currentPortfolio:"Aktuální portfolio:", remaining:"Zbývá:",
-    passiveIncome:"Pasivní příjem nyní:", estimatedTime:"Odhadovaný čas",
-    projection:"Projekce portfolia", fiProgress:"FI Progress",
-    fiProjection:"Graf projekce portfolia", sensitivity:"Citlivostní analýza SWR",
-    // Settings
-    settingsTitle:"Nastavení", syncStatus:"Stav synchronizace",
-    synced:"☁ Synchronizováno", saving:"↻ Ukládám...", syncError:"⚠ Chyba připojení",
-    localOnly:"💾 Pouze lokálně", exchangeRates:"Kurzy měn", updateRates:"↻ Aktualizovat kurzy online",
-    manualPrices:"Ruční update cen", backup:"Záloha a reset",
-    exportJson:"📤 Exportovat zálohu JSON", importJson:"📥 Importovat zálohu JSON",
-    deleteTransactions:"🗑 Smazat transakce", resetAll:"⚠ Reset všeho",
-    // Auth
-    appSubtitle:"Správa investičního portfolia", login:"Přihlásit se",
-    register:"Registrace", name:"Jméno (volitelné)", email:"Email",
-    password:"Heslo (min. 6 znaků)", passwordLogin:"Heslo",
-    passwordRepeat:"Heslo znovu", forgotPassword:"Zapomněl jsem heslo",
-    resetPassword:"🔑 Reset hesla", resetDesc:"Zadej svůj email a pošleme ti odkaz pro nastavení nového hesla.",
-    sendReset:"📧 Odeslat reset email", backToLogin:"← Zpět na přihlášení",
-    createAccount:"✓ Vytvořit účet", loggingIn:"⟳ Načítám...",
-    sending:"⟳ Odesílám...", secureLogin:"Bezpečné přihlášení přes Supabase Auth · Data šifrována",
-    // Admin
-    adminPanel:"Admin panel — správa uživatelů", addUser:"Přidat nového uživatele",
-    userList:"Uživatelé", approved:"Schválen", role:"Role", registration:"Registrace",
-    // General
-    save:"Uložit", cancel:"Zrušit", add:"Přidat", delete:"Smazat",
-    confirm:"Potvrdit", close:"Zavřít", edit:"Upravit",
-    months:["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"],
-  },
-  en: {
-    // Nav tabs
-    dashboard:"Overview", portfolio:"Portfolio", transakce:"Transactions",
-    cashflow:"Deposits/Withdrawals", dividendy:"Dividends", novinky:"News",
-    analyza:"Analysis", fi:"FI Calculator", nastaveni:"Settings",
-    // Dashboard
-    currentValue:"Current Value", invested:"Invested",
-    gainLoss:"Gain / Loss", dayChange:"Daily Change",
-    tested3y:"Passed 3Y Test", dividendsReceived:"Dividends Received",
-    portfolioYield:"Portfolio Yield", yieldOnCost:"Yield on Cost",
-    annualDividends:"Annual Dividends",
-    portfolioGrowth:"Portfolio Growth", allocation:"Allocation",
-    topPositions:"Top Positions (CZK)", annualReturns:"Annual Returns",
-    upcomingDividends:"Upcoming Dividends", upcomingEarnings:"Upcoming Earnings",
-    afterClose:"after close", beforeOpen:"before open",
-    // Portfolio
-    positions:"Portfolio Positions", quantity:"Quantity",
-    avgPrice:"Avg. Price", currentPrice:"Curr. Price",
-    valuesCZK:"Value CZK", gainLossPct:"Gain/Loss",
-    annualReturn:"Annual Return", daily:"Daily %",
-    days:"Days", test3y:"3Y Test",
-    all:"All", stocks:"Stocks", etf:"ETF", crypto:"Crypto",
-    sortBy:"Sort:", ascending:"↑ Ascending", descending:"↓ Descending",
-    // Transactions
-    transactions:"Transaction History", addTransaction:"+ Add",
-    importCsv:"📂 Import CSV", exportCsv:"📤 Export CSV",
-    deleteAll:"🗑 Delete All", autoDiv:"🤖 Auto-Dividends",
-    date:"Date", type:"Type", ticker:"Ticker", category:"Category",
-    price:"Price", fee:"Fee", totalCZK:"Total CZK", notes:"Notes",
-    buy:"Buy", sell:"Sell", dividend:"Dividend",
-    deposit:"Deposit", withdraw:"Withdrawal",
-    // Cashflow
-    cashflowTitle:"Deposits & Withdrawals",
-    totalDeposits:"Total Deposits", totalWithdraws:"Total Withdrawals",
-    netDeposit:"Net Deposit", roi:"ROI on Invested Capital",
-    portfolioValue:"Current Portfolio Value", absoluteGain:"Absolute Gain",
-    addDepositWithdraw:"+ Add Deposit/Withdrawal",
-    // Dividends
-    dividendCalendar:"Dividend Calendar",
-    receivedYear:"Received", expectedEoy:"Expected by Year End",
-    totalYear:"Total", annualEst:"Annual Est. (4× quarterly)",
-    monthlyOverview:"Monthly Overview", received:"received", expected:"expected",
-    upcomingPayments:"Upcoming Payments", earningsCalendar:"Earnings Calendar",
-    // News
-    newsTitle:"News & Updates", updated:"Updated:", refresh:"↻ Refresh",
-    myPortfolio:"My Portfolio", noNews:"No news available", loadingNews:"Loading news...",
-    readArticle:"→ read article", myPortfolioTag:"📊 your portfolio",
-    // Analysis
-    analysisTitle:"Stock Analysis", fundamentalCharts:"📈 Fundamental Charts",
-    valuation:"🔍 Valuation (DCF/Graham)",
-    loadCharts:"📊 Load Charts", loading:"⟳ Loading...",
-    // FI
-    fiTitle:"Financial Independence Calculator",
-    fiParams:"FI Parameters", monthlyExpenses:"Monthly Expenses (CZK)",
-    monthlyInvestment:"Monthly Investment (CZK)", annualReturn2:"Expected Annual Return (%)",
-    swr:"Safe Withdrawal Rate / SWR (%)", fiNumber:"FI Number (target):",
-    currentPortfolio:"Current Portfolio:", remaining:"Remaining:",
-    passiveIncome:"Passive Income Now:", estimatedTime:"Estimated Time",
-    projection:"Portfolio Projection", fiProgress:"FI Progress",
-    fiProjection:"Portfolio Projection Chart", sensitivity:"SWR Sensitivity Analysis",
-    // Settings
-    settingsTitle:"Settings", syncStatus:"Sync Status",
-    synced:"☁ Synchronized", saving:"↻ Saving...", syncError:"⚠ Connection Error",
-    localOnly:"💾 Local Only", exchangeRates:"Exchange Rates", updateRates:"↻ Update Rates Online",
-    manualPrices:"Manual Price Update", backup:"Backup & Reset",
-    exportJson:"📤 Export JSON Backup", importJson:"📥 Import JSON Backup",
-    deleteTransactions:"🗑 Delete Transactions", resetAll:"⚠ Reset Everything",
-    // Auth
-    appSubtitle:"Investment Portfolio Manager", login:"Sign In",
-    register:"Register", name:"Name (optional)", email:"Email",
-    password:"Password (min. 6 chars)", passwordLogin:"Password",
-    passwordRepeat:"Repeat Password", forgotPassword:"Forgot my password",
-    resetPassword:"🔑 Reset Password", resetDesc:"Enter your email and we will send you a password reset link.",
-    sendReset:"📧 Send Reset Email", backToLogin:"← Back to Login",
-    createAccount:"✓ Create Account", loggingIn:"⟳ Loading...",
-    sending:"⟳ Sending...", secureLogin:"Secure login via Supabase Auth · Data encrypted",
-    // Admin
-    adminPanel:"Admin Panel — User Management", addUser:"Add New User",
-    userList:"Users", approved:"Approved", role:"Role", registration:"Registered",
-    // General
-    save:"Save", cancel:"Cancel", add:"Add", delete:"Delete",
-    confirm:"Confirm", close:"Close", edit:"Edit",
-    months:["January","February","March","April","May","June","July","August","September","October","November","December"],
-  }
-};
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -2832,7 +2651,7 @@ export default function App() {
 
   // Show login screen if not authenticated (and supabase is configured)
   if (supabase && !authUser) return (
-    <AuthScreen onAuth={(user, profile) => { setAuthUser(user); setUserProfile(profile); }} lang={lang} setLang={setLang} />
+    <AuthScreen onAuth={(user, profile) => { setAuthUser(user); setUserProfile(profile); }} />
   );
 
   if (!loaded) return (
