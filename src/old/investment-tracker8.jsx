@@ -1003,35 +1003,67 @@ function NewsTab({ portfolio, S }) {
 
   const tickers = portfolio.positions.map(p => p.ticker).filter(t => !["VKLAD","VÝBĚR"].includes(t));
 
+  // RSS feeds via allorigins proxy (CORS-free)
+  const RSS_FEEDS = [
+    { url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AAPL,MSFT,GOOGL&region=US&lang=en-US", label: "Yahoo Finance" },
+    { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", label: "CNBC Markets" },
+    { url: "https://feeds.marketwatch.com/marketwatch/topstories/", label: "MarketWatch" },
+    { url: "https://feeds.a.dj.com/rss/RSSMarketsMain.xml", label: "WSJ Markets" },
+  ];
+
   const fetchNews = async () => {
     setLoading(true);
     setError("");
-    try {
-      const res = await fetch("/api/news", { signal: AbortSignal.timeout(15000) });
-      if (!res.ok) throw new Error("Server vrátil chybu " + res.status);
-      const data = await res.json();
-      if (!data.items || data.items.length === 0) {
-        setError("Žádné novinky k dispozici. Zkus to znovu za chvíli.");
-        setLoading(false);
-        return;
-      }
-      const enriched = data.items.map(item => ({
-        ...item,
-        date: new Date(item.date),
-        tickers: tickers.filter(t =>
-          item.title.toLowerCase().includes(t.toLowerCase()) ||
-          (item.desc||"").toLowerCase().includes(t.toLowerCase())
-        ),
-        isPortfolio: tickers.some(t =>
-          item.title.toLowerCase().includes(t.toLowerCase()) ||
-          (item.desc||"").toLowerCase().includes(t.toLowerCase())
-        ),
-      }));
-      setNews(enriched);
-      setLastFetched(new Date());
-    } catch(e) {
-      setError("Nepodařilo se načíst novinky: " + e.message);
+    const allNews = [];
+
+    // Use rss2json.com — free CORS-friendly RSS to JSON API
+    for (const feed of RSS_FEEDS) {
+      try {
+        const apiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.url)}&api_key=&count=15`;
+        const res = await fetch(apiUrl, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (data.status !== "ok" || !data.items) continue;
+        data.items.forEach(item => {
+          const title = item.title || "";
+          const link = item.link || "";
+          const pubDate = item.pubDate || "";
+          const desc = (item.description || item.content || "").replace(/<[^>]*>/g,"").slice(0,200);
+          const relatedTickers = tickers.filter(t =>
+            title.toLowerCase().includes(t.toLowerCase()) ||
+            desc.toLowerCase().includes(t.toLowerCase())
+          );
+          allNews.push({
+            id: link + title,
+            title: title.slice(0, 130),
+            link,
+            desc,
+            date: pubDate ? new Date(pubDate) : new Date(),
+            source: feed.label,
+            tickers: relatedTickers,
+            isPortfolio: relatedTickers.length > 0,
+          });
+        });
+      } catch(e) { console.warn("RSS feed error:", feed.label, e.message); }
     }
+
+    // Deduplicate by title similarity
+    const seen = new Set();
+    const deduped = allNews.filter(n => {
+      const key = n.title.slice(0, 40).toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    deduped.sort((a, b) => b.date - a.date);
+
+    if (deduped.length === 0) {
+      setError("Nepodařilo se načíst novinky. Zkontroluj připojení k internetu.");
+    }
+
+    setNews(deduped.slice(0, 60));
+    setLastFetched(new Date());
     setLoading(false);
   };
 
@@ -1486,7 +1518,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
 
           {/* OVERVIEW */}
           {activeChart==="overview" && (
-            <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <div>
                 <ChartCard title="Revenue (mld.)" desc="Roční tržby v miliardách USD">
                   <MiniChart data={mkData("revenue")} type="bar" color="#6366f1" label="rev"/>
@@ -2633,15 +2665,6 @@ export default function App() {
   const TAB_LABELS = { dashboard:"Přehled", portfolio:"Portfolio", transakce:"Transakce", cashflow:"Vklady/Výběry", dividendy:"Dividendy", novinky:"Novinky", analyza:"Analýza", fi:"FI Kalkulačka", nastaveni:"Nastavení" };
   const filtered = filterCat === "all" ? portfolio.positions : portfolio.positions.filter(p => p.category === filterCat);
 
-  // ─── MOBILE DETECTION ────────────────────────────────────────────────────
-  const [isMobile, setIsMobile] = useState(typeof window !== "undefined" && window.innerWidth < 768);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
-
   // Auth loading spinner
   if (authLoading) return (
     <div style={{ minHeight:"100vh", background:"#13192b", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"monospace" }}>
@@ -2726,14 +2749,12 @@ export default function App() {
             {ratesStatus === "loading" && <span style={{ fontSize:10, color:"#f59e0b" }}>↻ kurzy...</span>}
             {ratesStatus === "ok" && <span style={{ fontSize:10, color:"#10b981" }}>✓ kurzy</span>}
             {ratesStatus === "error" && <span style={{ fontSize:10, color:"#ef4444" }}>kurzy offline</span>}
-            !isMobile && (
-              <span style={{ fontSize:10, fontWeight:700, color: darkMode?"#8ba8d0":"#4a6080",
-                background: darkMode?"#1e2d45":"#d8e4f4",
-                padding:"3px 10px", borderRadius:8 }}>
-                USD <b style={{color: darkMode?"#c8d8f0":"#1a2540"}}>{rates.USD_CZK}</b>
-                &nbsp;·&nbsp;EUR <b style={{color: darkMode?"#c8d8f0":"#1a2540"}}>{rates.EUR_CZK}</b>
-              </span>
-            )
+            <span style={{ fontSize:10, fontWeight:700, color: darkMode?"#8ba8d0":"#4a6080",
+              background: darkMode?"#1e2d45":"#d8e4f4",
+              padding:"3px 10px", borderRadius:8 }}>
+              USD <b style={{color: darkMode?"#c8d8f0":"#1a2540"}}>{rates.USD_CZK}</b>
+              &nbsp;·&nbsp;EUR <b style={{color: darkMode?"#c8d8f0":"#1a2540"}}>{rates.EUR_CZK}</b>
+            </span>
             <span style={{ fontSize:10, fontWeight:700, padding:"3px 10px", borderRadius:8,
               background: syncStatus==="ok"?(darkMode?"#064e3b":"#d1fae5"):syncStatus==="syncing"?(darkMode?"#451a03":"#fef3c7"):syncStatus==="error"?(darkMode?"#450a0a":"#fee2e2"):(darkMode?"#1e2d45":"#d8e4f4"),
               color: syncStatus==="ok"?"#10b981":syncStatus==="syncing"?"#f59e0b":syncStatus==="error"?"#ef4444":(darkMode?"#8ba8d0":"#4a6080") }}>
@@ -2760,7 +2781,7 @@ export default function App() {
         </div>
       </nav>
 
-      <main style={{...S.main, paddingBottom: isMobile ? 80 : 20}}>
+      <main style={S.main}>
 
         {/* ─── DASHBOARD ────────────────────────────────────────────────── */}
         {tab === "dashboard" && (
@@ -2790,7 +2811,7 @@ export default function App() {
             </div>
 
             {/* CHARTS */}
-            <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"2fr 1fr", gap:14, marginBottom:14 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:16, marginBottom:16 }}>
               <div style={S.card}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
                   <div style={S.sectionTitle}>Vývoj portfolia</div>
@@ -2825,7 +2846,7 @@ export default function App() {
             </div>
 
             {/* UPCOMING */}
-            <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:14 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
               <div style={S.card}>
                 <div style={S.sectionTitle}>📅 Nadcházející dividendy</div>
                 {dividends.sort((a,b)=>new Date(a.date)-new Date(b.date)).slice(0,5).map((d,i) => (
@@ -3477,7 +3498,7 @@ export default function App() {
         {tab === "fi" && (
           <>
             <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:14 }}>🎯 Kalkulačka finanční nezávislosti</div>
-            <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:14 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
               <div>
                 <div style={S.card}>
                   <div style={S.sectionTitle}>Parametry FI</div>
@@ -3577,7 +3598,7 @@ export default function App() {
         {tab === "nastaveni" && (
           <>
             <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:14 }}>Nastavení</div>
-            <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:14 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
               <div style={S.card}>
                 <div style={S.sectionTitle}>☁ Supabase sync</div>
               <div style={{ padding:"12px 14px", background:"#0a0f1e", borderRadius:7, marginBottom:14, border:"1px solid #1e293b" }}>
