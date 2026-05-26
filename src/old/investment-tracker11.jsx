@@ -994,7 +994,7 @@ function CsvImportModal({ onClose, onImport, S }) {
 
 
 // ─── NEWS TAB COMPONENT ───────────────────────────────────────────────────────
-function NewsTab({ portfolio, S, t=T.cs }) {
+function NewsTab({ portfolio, S }) {
   const [news, setNews] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState("vse");
@@ -1051,7 +1051,7 @@ function NewsTab({ portfolio, S, t=T.cs }) {
           {lastFetched && <div style={{ fontSize:10, color:"#475569", marginTop:2 }}>Aktualizováno: {lastFetched.toLocaleTimeString("cs-CZ")}</div>}
         </div>
         <button style={{ ...S.btn("primary"), padding:"7px 14px" }} onClick={fetchNews} disabled={loading}>
-          {loading ? "⟳ Načítám..." : t.refresh}
+          {loading ? "⟳ Načítám..." : "↻ Aktualizovat"}
         </button>
       </div>
 
@@ -1060,7 +1060,7 @@ function NewsTab({ portfolio, S, t=T.cs }) {
         {[
           ["vse", `${t.all} (${news.length})`],
           ["portfolio", `${t.myPortfolio} (${portfolioNews})`],
-          ...tickers.slice(0,8).map(tk => [tk, tk]),
+          ...tickers.slice(0,8).map(t => [t, t]),
         ].map(([val, label]) => (
           <button key={val} style={{ ...S.btn(activeFilter===val?"primary":"outline"), padding:"5px 12px", fontSize:10 }}
             onClick={() => setActiveFilter(val)}>{label}</button>
@@ -2205,7 +2205,7 @@ const T = {
     // News
     newsTitle:"Novinky & Zprávy", updated:"Aktualizováno:", refresh:"↻ Aktualizovat",
     myPortfolio:"Moje portfolio", noNews:"Žádné novinky", loadingNews:"Načítám novinky...",
-    readArticle:"→ přejít na článek", myPortfolioTag:"📊 tvé portfolio",
+    readArticle:t.readArticle, myPortfolioTag:t.myPortfolioTag,
     // Analysis
     analysisTitle:"Analýza akcií", fundamentalCharts:"📈 Fundamentální grafy",
     valuation:"🔍 Ocenění (DCF/Graham)",
@@ -2389,7 +2389,6 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | ok | error | offline
   const [darkMode, setDarkMode] = useState(true);
   const [fontSize, setFontSize] = useState(13); // 11-17
-  const [lang, setLang] = useState("cs"); // cs | en
 
   // ─── PERSIST — per-user Supabase tables + localStorage fallback ──────────
   useEffect(() => {
@@ -2414,10 +2413,8 @@ export default function App() {
         if (fi) setFiSettings(JSON.parse(fi));
         const dm = localStorage.getItem("inv_darkMode");
         const fs = localStorage.getItem("inv_fontSize");
-        const lg = localStorage.getItem("inv_lang");
         if (dm !== null) setDarkMode(JSON.parse(dm));
         if (fs !== null) setFontSize(JSON.parse(fs));
-        if (lg) setLang(lg);
       } catch {}
 
       if (!supabase || !uid) { setLoaded(true); setSyncStatus("offline"); return; }
@@ -2537,7 +2534,6 @@ export default function App() {
   // Persist theme/fontSize locally (not synced to cloud)
   useEffect(() => { try { localStorage.setItem("inv_darkMode", JSON.stringify(darkMode)); } catch {} }, [darkMode]);
   useEffect(() => { try { localStorage.setItem("inv_fontSize", JSON.stringify(fontSize)); } catch {} }, [fontSize]);
-  useEffect(() => { try { localStorage.setItem("inv_lang", lang); } catch {} }, [lang]);
 
   // Realtime sync — shared rates/prices
   useEffect(() => {
@@ -2811,7 +2807,6 @@ export default function App() {
       textTransform:"uppercase", marginBottom:14, paddingBottom:8, borderBottom:`1px solid ${border}` },
   };
 
-  const t = T[lang] || T.cs; // current translations
   const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b" };
   const catLabel = { stock:t.stocks, etf:t.etf, crypto:t.crypto };
 
