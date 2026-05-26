@@ -1158,8 +1158,6 @@ function NewsTab({ portfolio, S }) {
 
 // ─── MINI SVG LINE/BAR CHART ─────────────────────────────────────────────────
 const MiniChart = ({ data, type="bar", color="#6c63ff", label="", unit="", height=110, darkMode=true }) => {
-  const [tooltip, setTooltip] = useState(null); // {x, y, label, value}
-
   if (!data || data.length < 2) return <div style={{color:"#475569",fontSize:11,padding:20,textAlign:"center"}}>Nedostatek dat</div>;
   const vals = data.map(d => d.value);
   const min = Math.min(...vals, 0); const max = Math.max(...vals, 0.001);
@@ -1173,56 +1171,25 @@ const MiniChart = ({ data, type="bar", color="#6c63ff", label="", unit="", heigh
   const gridColor = darkMode ? "#1e2d45" : "#d0d8e8";
   const labelColor = darkMode ? "#5a7399" : "#6a7fa0";
   const textColor = darkMode ? "#c8d8f0" : "#2a3a5a";
-  const tooltipBg = darkMode ? "#1e2d45" : "#ffffff";
-  const tooltipBorder = darkMode ? "#3d5580" : "#c0ccdd";
 
   const fmtV = v => {
     const abs = Math.abs(v);
-    if (abs >= 1e9) return (v/1e9).toFixed(2)+"B";
-    if (abs >= 1e6) return (v/1e6).toFixed(2)+"M";
-    if (abs >= 1000) return (v/1000).toFixed(1)+"K";
-    return Number.isInteger(v) ? v.toString() : v.toFixed(2);
-  };
-
-  // Convert SVG coords to container % for tooltip positioning
-  const showTooltip = (e, d, svgX, svgY) => {
-    const rect = e.currentTarget.closest("svg").getBoundingClientRect();
-    const scaleX = rect.width / w;
-    const scaleY = rect.height / h;
-    const px = svgX * scaleX;
-    const py = svgY * scaleY;
-    setTooltip({ px, py, label: d.label, value: d.value });
+    if (abs >= 1e9) return (v/1e9).toFixed(1)+"B";
+    if (abs >= 1e6) return (v/1e6).toFixed(1)+"M";
+    if (abs >= 1000) return (v/1000).toFixed(0)+"K";
+    return Number.isInteger(v) ? v.toString() : v.toFixed(1);
   };
 
   return (
-    <div style={{background:bg, borderRadius:12, padding:"8px 4px", overflowX:"auto", position:"relative"}}>
-      {/* Tooltip */}
-      {tooltip && (
-        <div style={{
-          position:"absolute", pointerEvents:"none", zIndex:50,
-          left: tooltip.px, top: tooltip.py - 52,
-          transform:"translateX(-50%)",
-          background:tooltipBg, border:`1px solid ${tooltipBorder}`,
-          borderRadius:8, padding:"6px 12px", whiteSpace:"nowrap",
-          boxShadow:"0 4px 16px rgba(0,0,0,0.3)",
-        }}>
-          <div style={{fontSize:11,color:labelColor,fontWeight:600,marginBottom:2}}>{tooltip.label}</div>
-          <div style={{fontSize:13,color:tooltip.value>=0?color:"#f87171",fontWeight:800}}>
-            {fmtV(tooltip.value)}{unit}
-          </div>
-          <div style={{position:"absolute",bottom:-5,left:"50%",transform:"translateX(-50%)",
-            width:8,height:8,background:tooltipBg,border:`1px solid ${tooltipBorder}`,
-            borderTop:"none",borderLeft:"none",transform:"translateX(-50%) rotate(45deg)"}}/>
-        </div>
-      )}
-      <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",minWidth:280,height:"auto",overflow:"visible"}}
-        onMouseLeave={()=>setTooltip(null)}>
+    <div style={{background:bg, borderRadius:12, padding:"8px 4px", overflowX:"auto"}}>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",minWidth:280,height:"auto"}}>
         <defs>
           <linearGradient id={`g_${label}`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity="0.5"/>
             <stop offset="100%" stopColor={color} stopOpacity="0.05"/>
           </linearGradient>
         </defs>
+        {/* Grid lines + Y labels */}
         {[0,0.25,0.5,0.75,1].map((t,i)=>{
           const v = max - range*t;
           return (
@@ -1234,45 +1201,32 @@ const MiniChart = ({ data, type="bar", color="#6c63ff", label="", unit="", heigh
             </g>
           );
         })}
+        {/* Zero line */}
         {min < 0 && max > 0 && (
           <line x1={pad.l} y1={yS(0)} x2={w-pad.r} y2={yS(0)} stroke={darkMode?"#4a6080":"#8899bb"} strokeWidth="1.5" strokeDasharray="4,3"/>
         )}
-
-        {/* Tooltip crosshair vertical line */}
-        {tooltip && type!=="line" && (
-          <line x1={tooltip._svgX||0} y1={pad.t} x2={tooltip._svgX||0} y2={h-pad.b}
-            stroke={color} strokeWidth="1" strokeDasharray="3,2" opacity="0.5"/>
-        )}
-
         {type === "bar" && data.map((d,i) => {
           const bx = pad.l + (i/data.length)*iW + (iW/data.length-barW)/2;
           const isPos = d.value >= 0;
           const bH = Math.max(2, Math.abs((d.value-(min<0?0:min))/range*iH));
           const by = isPos ? yS(Math.max(d.value,0)) : yS(0);
           const c = d.value >= 0 ? color : "#f87171";
-          const isHovered = tooltip?.label === d.label;
+          // Value label on top of bar
           const showVal = barW > 20;
-          const centerX = bx + barW/2;
           return (
-            <g key={i} style={{cursor:"pointer"}}
-              onMouseEnter={e=>showTooltip(e, d, centerX, by)}
-              onTouchStart={e=>{e.preventDefault();showTooltip(e.touches[0]||e, d, centerX, by);}}>
-              {/* Invisible wider hit area for easy touch */}
-              <rect x={bx-6} y={pad.t} width={barW+12} height={iH} fill="transparent"/>
-              <rect x={bx} y={by} width={barW} height={bH}
-                fill={c} opacity={isHovered?1:0.85} rx={3}
-                style={{filter:isHovered?"brightness(1.3)":"none", transition:"all 0.15s"}}/>
+            <g key={i}>
+              <rect x={bx} y={by} width={barW} height={bH} fill={c} opacity={0.92} rx={3}>
+                <title>{d.label}: {fmtV(d.value)}{unit}</title>
+              </rect>
               {showVal && (
-                <text x={centerX} y={isPos?by-4:by+bH+11} textAnchor="middle"
-                  fill={isHovered?c:textColor} fontSize="7.5" fontWeight="700">
+                <text x={bx+barW/2} y={isPos?by-3:by+bH+10} textAnchor="middle" fill={textColor} fontSize="7.5" fontWeight="700">
                   {fmtV(d.value)}{unit}
                 </text>
               )}
-              <text x={centerX} y={h-6} textAnchor="middle" fill={isHovered?color:labelColor} fontSize="8.5" fontWeight={isHovered?"800":"600"}>{d.label}</text>
+              <text x={bx+barW/2} y={h-6} textAnchor="middle" fill={labelColor} fontSize="8.5" fontWeight="600">{d.label}</text>
             </g>
           );
         })}
-
         {type === "line" && (
           <>
             <path d={data.map((d,i)=>`${i===0?"M":"L"}${xS(i)},${yS(d.value)}`).join(" ")+
@@ -1280,56 +1234,33 @@ const MiniChart = ({ data, type="bar", color="#6c63ff", label="", unit="", heigh
               fill={`url(#g_${label})`}/>
             <path d={data.map((d,i)=>`${i===0?"M":"L"}${xS(i)},${yS(d.value)}`).join(" ")}
               fill="none" stroke={color} strokeWidth="2.5"/>
-            {data.map((d,i)=>{
-              const cx=xS(i), cy2=yS(d.value);
-              const isHovered = tooltip?.label === d.label;
+            {data.map((d,i)=>(
+              <g key={i}>
+                <circle cx={xS(i)} cy={yS(d.value)} r="3.5" fill={color} stroke={bg} strokeWidth="1.5"/>
+                <text x={xS(i)} y={yS(d.value)-8} textAnchor="middle" fill={textColor} fontSize="8" fontWeight="700">{fmtV(d.value)}{unit}</text>
+                <text x={xS(i)} y={h-6} textAnchor="middle" fill={labelColor} fontSize="8.5" fontWeight="600">{d.label}</text>
+              </g>
+            ))}
+          </>
+        )}
+        {type === "combo" && (
+          <>
+            {data.map((d,i) => {
+              const bx = pad.l + (i/data.length)*iW + (iW/data.length-barW)/2;
+              const isPos = d.value >= 0;
+              const bH = Math.max(2, Math.abs(yS(0)-yS(d.value)));
+              const by = isPos ? yS(d.value) : yS(0);
+              const c = d.value >= 0 ? color : "#f87171";
               return (
-                <g key={i} style={{cursor:"pointer"}}
-                  onMouseEnter={e=>showTooltip(e, d, cx, cy2)}
-                  onTouchStart={e=>{e.preventDefault();showTooltip(e.touches[0]||e, d, cx, cy2);}}>
-                  <circle cx={cx} cy={cy2} r={isHovered?6:3.5}
-                    fill={color} stroke={bg} strokeWidth="1.5"
-                    style={{transition:"r 0.15s"}}/>
-                  {/* Wide invisible touch target */}
-                  <circle cx={cx} cy={cy2} r="16" fill="transparent"/>
-                  {!isHovered && <text x={cx} y={cy2-9} textAnchor="middle" fill={textColor} fontSize="8" fontWeight="700">{fmtV(d.value)}{unit}</text>}
-                  <text x={cx} y={h-6} textAnchor="middle" fill={isHovered?color:labelColor} fontSize="8.5" fontWeight={isHovered?"800":"600"}>{d.label}</text>
+                <g key={i}>
+                  <rect x={bx} y={by} width={barW} height={bH} fill={c} opacity={0.85} rx={3}/>
+                  <text x={bx+barW/2} y={isPos?by-3:by+bH+10} textAnchor="middle" fill={textColor} fontSize="7.5" fontWeight="700">{fmtV(d.value)}{unit}</text>
+                  <text x={bx+barW/2} y={h-6} textAnchor="middle" fill={labelColor} fontSize="8.5" fontWeight="600">{d.label}</text>
                 </g>
               );
             })}
-            {/* Vertical crosshair for line */}
-            {tooltip && (() => {
-              const idx = data.findIndex(d=>d.label===tooltip.label);
-              if(idx<0) return null;
-              return <line x1={xS(idx)} y1={pad.t} x2={xS(idx)} y2={h-pad.b} stroke={color} strokeWidth="1" strokeDasharray="3,2" opacity="0.5"/>;
-            })()}
           </>
         )}
-
-        {type === "combo" && data.map((d,i) => {
-          const bx = pad.l + (i/data.length)*iW + (iW/data.length-barW)/2;
-          const isPos = d.value >= 0;
-          const bH = Math.max(2, Math.abs(yS(0)-yS(d.value)));
-          const by = isPos ? yS(d.value) : yS(0);
-          const c = d.value >= 0 ? color : "#f87171";
-          const isHovered = tooltip?.label === d.label;
-          const centerX = bx + barW/2;
-          return (
-            <g key={i} style={{cursor:"pointer"}}
-              onMouseEnter={e=>showTooltip(e, d, centerX, by)}
-              onTouchStart={e=>{e.preventDefault();showTooltip(e.touches[0]||e, d, centerX, by);}}>
-              <rect x={bx-6} y={pad.t} width={barW+12} height={iH} fill="transparent"/>
-              <rect x={bx} y={by} width={barW} height={bH}
-                fill={c} opacity={isHovered?1:0.82} rx={3}
-                style={{filter:isHovered?"brightness(1.3)":"none",transition:"all 0.15s"}}/>
-              <text x={centerX} y={isPos?by-4:by+bH+11} textAnchor="middle"
-                fill={isHovered?c:textColor} fontSize="7.5" fontWeight="700">
-                {fmtV(d.value)}{unit}
-              </text>
-              <text x={centerX} y={h-6} textAnchor="middle" fill={isHovered?color:labelColor} fontSize="8.5" fontWeight={isHovered?"800":"600"}>{d.label}</text>
-            </g>
-          );
-        })}
       </svg>
     </div>
   );
