@@ -1881,19 +1881,9 @@ function AuthScreen({ onAuth }) {
       if (mode === "login") {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        // Fetch profile — retry once if RLS causes empty result
-        let profile = null;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const { data: p, error: pe } = await supabase.from("user_profiles")
-            .select("approved,role,display_name").eq("id", data.user.id).single();
-          if (p) { profile = p; break; }
-          await new Promise(r => setTimeout(r, 600)); // wait and retry
-        }
-        // If profile still missing, auto-approve (first user or trigger delay)
-        if (!profile) {
-          profile = { approved: true, role: "user", display_name: "" };
-        }
-        if (!profile.approved) {
+        const { data: profile } = await supabase.from("user_profiles")
+          .select("approved,role,display_name").eq("id", data.user.id).single();
+        if (!profile?.approved) {
           await supabase.auth.signOut();
           throw new Error("Váš účet čeká na schválení administrátorem.");
         }
