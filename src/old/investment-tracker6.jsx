@@ -1846,15 +1846,13 @@ function AnalyzaTab({ rates, S }) {
 
 // Login / Register screen
 function AuthScreen({ onAuth }) {
-  const [mode, setMode] = useState("login"); // login | register | reset
+  const [mode, setMode] = useState("login"); // login | register
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [password2, setPassword2] = useState("");
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [showPass, setShowPass] = useState(false);
 
   const darkBg = "#13192b";
   const card = "#161d30";
@@ -1868,47 +1866,28 @@ function AuthScreen({ onAuth }) {
   const handle = async () => {
     setLoading(true); setError(""); setSuccess("");
     try {
-      if (mode === "reset") {
-        // Send password reset email
-        const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: window.location.origin + "?reset=true"
-        });
-        if (error) throw error;
-        setSuccess("✓ Email s odkazem pro reset hesla byl odeslán na " + email + ". Zkontroluj i spam.");
-        setLoading(false);
-        return;
-      }
       if (mode === "login") {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        const { data: profile } = await supabase.from("user_profiles")
-          .select("approved,role,display_name").eq("id", data.user.id).single();
+        // Check approved
+        const { data: profile } = await supabase.from("user_profiles").select("approved,role,display_name").eq("id", data.user.id).single();
         if (!profile?.approved) {
           await supabase.auth.signOut();
           throw new Error("Váš účet čeká na schválení administrátorem.");
         }
         onAuth(data.user, profile);
       } else {
-        // Register
-        if (password !== password2) throw new Error("Hesla se neshodují.");
-        if (password.length < 6) throw new Error("Heslo musí mít alespoň 6 znaků.");
-        const { data, error } = await supabase.auth.signUp({
-          email, password,
-          options: { data: { display_name: name || "" } }
-        });
+        const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
-        if (data?.user && name) {
-          await supabase.from("user_profiles").update({ display_name: name }).eq("id", data.user.id);
-        }
-        setSuccess("✓ Účet vytvořen! Nyní se přihlaste.");
+        // Update display name
+        if (name) await supabase.from("user_profiles").update({ display_name: name }).eq("id", data.user.id);
+        setSuccess("Účet vytvořen! Počkejte na schválení administrátorem.");
         setMode("login");
-        setPassword(""); setPassword2("");
       }
     } catch(e) {
       const msg = e.message || "";
-      if (msg.includes("Invalid login") || msg.includes("invalid_credentials")) setError("Špatný email nebo heslo.");
-      else if (msg.includes("already registered") || msg.includes("already been registered")) setError("Tento email je již zaregistrován. Přihlaste se.");
-      else if (msg.includes("Database error")) setError("Chyba databáze — zkontrolujte nastavení Supabase triggeru.");
+      if (msg.includes("Invalid login")) setError("Špatný email nebo heslo.");
+      else if (msg.includes("already registered")) setError("Tento email je již zaregistrován.");
       else setError(msg);
     }
     setLoading(false);
@@ -1918,114 +1897,58 @@ function AuthScreen({ onAuth }) {
     borderRadius:12, color:text, padding:"12px 16px", fontSize:13,
     fontFamily:"inherit", boxShadow:nmInset, outline:"none", marginBottom:12 };
 
-  const TABS = [["login","Přihlásit se"],["register","Registrace"]];
-
   return (
     <div style={{ minHeight:"100vh", background:darkBg, display:"flex", alignItems:"center",
       justifyContent:"center", fontFamily:"'IBM Plex Mono','Courier New',monospace", padding:20 }}>
-      <div style={{ width:"100%", maxWidth:420 }}>
+      <div style={{ width:"100%", maxWidth:400 }}>
         {/* Logo */}
         <div style={{ textAlign:"center", marginBottom:32 }}>
           <div style={{ fontSize:28, fontWeight:800, color:accent, letterSpacing:"0.15em", marginBottom:6 }}>📈 INVESTTRACK</div>
           <div style={{ fontSize:11, color:muted, letterSpacing:"0.08em" }}>Správa investičního portfolia</div>
         </div>
 
+        {/* Card */}
         <div style={{ background:card, borderRadius:20, padding:32, boxShadow:nmShadow, border:`1px solid ${border}` }}>
-
-          {mode === "reset" ? (
-            /* ── RESET HESLA ── */
-            <>
-              <div style={{ fontSize:14, fontWeight:700, color:text, marginBottom:6 }}>🔑 Reset hesla</div>
-              <div style={{ fontSize:11, color:muted, marginBottom:20, lineHeight:1.6 }}>
-                Zadej svůj email a pošleme ti odkaz pro nastavení nového hesla.
-              </div>
-              <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Tvůj email"
-                style={inp} type="email" onKeyDown={e=>e.key==="Enter"&&handle()}/>
-              {error && <div style={{ color:"#f87171", fontSize:12, marginBottom:12, padding:"8px 12px", background:"#f8717118", borderRadius:8 }}>{error}</div>}
-              {success && <div style={{ color:"#22d3a0", fontSize:12, marginBottom:12, padding:"8px 12px", background:"#22d3a018", borderRadius:8 }}>{success}</div>}
-              <button onClick={handle} disabled={loading} style={{ width:"100%", padding:"13px",
-                background:`linear-gradient(135deg,#5b52f0,${accent})`, color:"#fff", border:"none",
-                borderRadius:12, cursor:"pointer", fontSize:13, fontFamily:"inherit", fontWeight:700,
-                boxShadow:"0 6px 20px rgba(108,99,255,0.4)", opacity:loading?0.7:1 }}>
-                {loading ? "⟳ Odesílám..." : "📧 Odeslat reset email"}
+          {/* Tab switch */}
+          <div style={{ display:"flex", background:darkBg, borderRadius:12, padding:4, marginBottom:24, boxShadow:nmInset }}>
+            {[["login","Přihlásit se"],["register","Registrace"]].map(([m,l])=>(
+              <button key={m} style={{ flex:1, padding:"9px", border:"none", borderRadius:10, cursor:"pointer",
+                fontFamily:"inherit", fontSize:11, fontWeight:700, letterSpacing:"0.05em",
+                background: mode===m ? `linear-gradient(135deg,#5b52f0,${accent})` : "transparent",
+                color: mode===m ? "#fff" : muted,
+                boxShadow: mode===m ? "0 4px 12px rgba(108,99,255,0.4)" : "none",
+                transition:"all 0.2s" }}
+                onClick={()=>{ setMode(m); setError(""); setSuccess(""); }}>
+                {l}
               </button>
-              <button onClick={()=>{setMode("login");setError("");setSuccess("");}}
-                style={{ width:"100%", marginTop:10, padding:"10px", background:"transparent",
-                  color:muted, border:`1px solid ${border}`, borderRadius:12, cursor:"pointer",
-                  fontSize:11, fontFamily:"inherit" }}>
-                ← Zpět na přihlášení
-              </button>
-            </>
-          ) : (
-            /* ── LOGIN / REGISTER ── */
-            <>
-              {/* Tab switch */}
-              <div style={{ display:"flex", background:darkBg, borderRadius:12, padding:4, marginBottom:24, boxShadow:nmInset }}>
-                {TABS.map(([m,l])=>(
-                  <button key={m} style={{ flex:1, padding:"9px", border:"none", borderRadius:10, cursor:"pointer",
-                    fontFamily:"inherit", fontSize:11, fontWeight:700, letterSpacing:"0.05em",
-                    background: mode===m ? `linear-gradient(135deg,#5b52f0,${accent})` : "transparent",
-                    color: mode===m ? "#fff" : muted,
-                    boxShadow: mode===m ? "0 4px 12px rgba(108,99,255,0.4)" : "none",
-                    transition:"all 0.2s" }}
-                    onClick={()=>{ setMode(m); setError(""); setSuccess(""); }}>
-                    {l}
-                  </button>
-                ))}
-              </div>
+            ))}
+          </div>
 
-              {mode==="register" && (
-                <input value={name} onChange={e=>setName(e.target.value)} placeholder="Jméno (volitelné)"
-                  style={inp} type="text"/>
-              )}
-              <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email"
-                style={inp} type="email" onKeyDown={e=>e.key==="Enter"&&handle()}/>
-
-              {/* Password with show/hide */}
-              <div style={{ position:"relative", marginBottom:12 }}>
-                <input value={password} onChange={e=>setPassword(e.target.value)}
-                  placeholder={mode==="register" ? "Heslo (min. 6 znaků)" : "Heslo"}
-                  style={{...inp, marginBottom:0, paddingRight:48}}
-                  type={showPass?"text":"password"} onKeyDown={e=>e.key==="Enter"&&handle()}/>
-                <button onClick={()=>setShowPass(s=>!s)} style={{ position:"absolute", right:12, top:"50%",
-                  transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer",
-                  color:muted, fontSize:14 }}>{showPass?"🙈":"👁"}</button>
-              </div>
-
-              {mode==="register" && (
-                <input value={password2} onChange={e=>setPassword2(e.target.value)}
-                  placeholder="Heslo znovu" style={inp} type={showPass?"text":"password"}
-                  onKeyDown={e=>e.key==="Enter"&&handle()}/>
-              )}
-
-              {error && <div style={{ color:"#f87171", fontSize:12, marginBottom:12, padding:"8px 12px",
-                background:"#f8717118", borderRadius:8, border:"1px solid #f8717133" }}>{error}</div>}
-              {success && <div style={{ color:"#22d3a0", fontSize:12, marginBottom:12, padding:"8px 12px",
-                background:"#22d3a018", borderRadius:8, border:"1px solid #22d3a033" }}>{success}</div>}
-
-              <button onClick={handle} disabled={loading} style={{ width:"100%", padding:"13px",
-                background:`linear-gradient(135deg,#5b52f0,${accent})`, color:"#fff", border:"none",
-                borderRadius:12, cursor:"pointer", fontSize:13, fontFamily:"inherit", fontWeight:700,
-                letterSpacing:"0.06em", boxShadow:"0 6px 20px rgba(108,99,255,0.4)", transition:"all 0.2s",
-                opacity: loading ? 0.7 : 1 }}>
-                {loading ? "⟳ Načítám..." : mode==="login" ? "→ Přihlásit se" : "✓ Vytvořit účet"}
-              </button>
-
-              {/* Forgot password link */}
-              {mode==="login" && (
-                <button onClick={()=>{setMode("reset");setError("");setSuccess("");}}
-                  style={{ width:"100%", marginTop:12, padding:"8px", background:"transparent",
-                    color:muted, border:"none", cursor:"pointer", fontSize:11, fontFamily:"inherit",
-                    textDecoration:"underline" }}>
-                  Zapomněl jsem heslo
-                </button>
-              )}
-            </>
+          {mode==="register" && (
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="Jméno (volitelné)"
+              style={inp} type="text"/>
           )}
+          <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email"
+            style={inp} type="email" onKeyDown={e=>e.key==="Enter"&&handle()}/>
+          <input value={password} onChange={e=>setPassword(e.target.value)} placeholder="Heslo"
+            style={{...inp, marginBottom:20}} type="password" onKeyDown={e=>e.key==="Enter"&&handle()}/>
+
+          {error && <div style={{ color:"#f87171", fontSize:12, marginBottom:14, padding:"8px 12px",
+            background:"#f8717118", borderRadius:8, border:"1px solid #f8717133" }}>{error}</div>}
+          {success && <div style={{ color:"#22d3a0", fontSize:12, marginBottom:14, padding:"8px 12px",
+            background:"#22d3a018", borderRadius:8, border:"1px solid #22d3a033" }}>{success}</div>}
+
+          <button onClick={handle} disabled={loading} style={{ width:"100%", padding:"13px",
+            background:`linear-gradient(135deg,#5b52f0,${accent})`, color:"#fff", border:"none",
+            borderRadius:12, cursor:"pointer", fontSize:13, fontFamily:"inherit", fontWeight:700,
+            letterSpacing:"0.06em", boxShadow:"0 6px 20px rgba(108,99,255,0.4)", transition:"all 0.2s",
+            opacity: loading ? 0.7 : 1 }}>
+            {loading ? "⟳ Načítám..." : mode==="login" ? "Přihlásit se" : "Vytvořit účet"}
+          </button>
         </div>
 
         <div style={{ textAlign:"center", marginTop:20, fontSize:10, color:"#2d3f5a" }}>
-          Bezpečné přihlášení přes Supabase Auth · Data šifrována
+          Bezpečné přihlášení přes Supabase Auth
         </div>
       </div>
     </div>
