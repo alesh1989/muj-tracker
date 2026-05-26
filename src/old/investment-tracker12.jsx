@@ -1486,7 +1486,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
 
           {/* OVERVIEW */}
           {activeChart==="overview" && (
-            <div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr":"1fr 1fr",gap:12}}>
+            <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
               <div>
                 <ChartCard title="Revenue (mld.)" desc="Roční tržby v miliardách USD">
                   <MiniChart data={mkData("revenue")} type="bar" color="#6366f1" label="rev"/>
@@ -2457,21 +2457,9 @@ export default function App() {
         if (divRes.data?.data) setDividends(divRes.data.data);
         if (earRes.data?.data) setEarnings(earRes.data.data);
         if (fiRes.data?.data && Object.keys(fiRes.data.data).length) setFiSettings(fiRes.data.data);
-        // Shared rates & prices (may fail due to RLS - use localStorage fallback)
-        if (ratesRes.data?.data && Object.keys(ratesRes.data.data).length) {
-          setRates(ratesRes.data.data);
-          localStorage.setItem("inv_rates", JSON.stringify(ratesRes.data.data));
-        } else {
-          const cached = localStorage.getItem("inv_rates");
-          if (cached) try { setRates(JSON.parse(cached)); } catch {}
-        }
-        if (pricesRes.data?.data && Object.keys(pricesRes.data.data).length) {
-          setPrices(pricesRes.data.data);
-          localStorage.setItem("inv_prices", JSON.stringify(pricesRes.data.data));
-        } else {
-          const cached = localStorage.getItem("inv_prices");
-          if (cached) try { setPrices(JSON.parse(cached)); } catch {}
-        }
+        // Shared rates & prices
+        if (ratesRes.data?.data && Object.keys(ratesRes.data.data).length) setRates(ratesRes.data.data);
+        if (pricesRes.data?.data && Object.keys(pricesRes.data.data).length) setPrices(pricesRes.data.data);
 
         setSyncStatus("ok");
       } catch(e) { console.error(e); setSyncStatus("error"); }
@@ -2530,13 +2518,11 @@ export default function App() {
 
   // Save shared rates+prices (admin only or anyone — rates are public)
   const saveShared = useCallback(async (key, value) => {
-    try { localStorage.setItem(`inv_${key}`, JSON.stringify(value)); } catch {}
     if (!supabase) return;
     try {
-      const { error } = await supabase.from("shared_data")
-        .upsert({ id: key, data: value, updated_at: new Date().toISOString() });
-      if (error) console.warn("shared_data save:", error.message);
-    } catch(e) { console.warn("saveShared error:", e.message); }
+      localStorage.setItem(`inv_${key}`, JSON.stringify(value));
+      await supabase.from("shared_data").upsert({ id: key, data: value, updated_at: new Date().toISOString() });
+    } catch {}
   }, []);
 
   // Sleduj změny
@@ -2926,36 +2912,27 @@ export default function App() {
             {ratesStatus === "loading" && <span style={{ fontSize:10, color:"#f59e0b" }}>↻ kurzy...</span>}
             {ratesStatus === "ok" && <span style={{ fontSize:10, color:"#10b981" }}>✓ kurzy</span>}
             {ratesStatus === "error" && <span style={{ fontSize:10, color:"#ef4444" }}>kurzy offline</span>}
-            {!isMobile && (
+            !isMobile && (
               <span style={{ fontSize:10, fontWeight:700, color: darkMode?"#8ba8d0":"#4a6080",
                 background: darkMode?"#1e2d45":"#d8e4f4",
                 padding:"3px 10px", borderRadius:8 }}>
                 USD <b style={{color: darkMode?"#c8d8f0":"#1a2540"}}>{rates.USD_CZK}</b>
                 &nbsp;·&nbsp;EUR <b style={{color: darkMode?"#c8d8f0":"#1a2540"}}>{rates.EUR_CZK}</b>
               </span>
-            )}
+            )
             <span style={{ fontSize:10, fontWeight:700, padding:"3px 10px", borderRadius:8,
               background: syncStatus==="ok"?(darkMode?"#064e3b":"#d1fae5"):syncStatus==="syncing"?(darkMode?"#451a03":"#fef3c7"):syncStatus==="error"?(darkMode?"#450a0a":"#fee2e2"):(darkMode?"#1e2d45":"#d8e4f4"),
               color: syncStatus==="ok"?"#10b981":syncStatus==="syncing"?"#f59e0b":syncStatus==="error"?"#ef4444":(darkMode?"#8ba8d0":"#4a6080") }}>
               {syncStatus==="ok"?"☁ sync OK":syncStatus==="syncing"?"↻ ukládám...":syncStatus==="error"?"⚠ chyba":"💾 lokálně"}
             </span>
             {/* Font size controls */}
-            {!isMobile && (
-              <div style={{ display:"flex", alignItems:"center", gap:4 }}>
-                <button style={{ ...S.btn("outline"), padding:"3px 8px", fontSize:14, lineHeight:1 }}
-                  onClick={() => setFontSize(s => Math.max(11, s-1))} title="Zmenšit písmo">A-</button>
-                <span style={{ fontSize:10, color:textMuted, width:22, textAlign:"center" }}>{fontSize}</span>
-                <button style={{ ...S.btn("outline"), padding:"3px 8px", fontSize:14, lineHeight:1 }}
-                  onClick={() => setFontSize(s => Math.min(17, s+1))} title="Zvětšit písmo">A+</button>
-              </div>
-            )}
-            {/* Language toggle */}
-            <button style={{ ...S.btn("outline"), padding:"4px 10px", fontSize:11, fontWeight:700,
-              color: lang==="cs" ? textMuted : accent }}
-              onClick={() => setLang(l => l==="cs" ? "en" : "cs")}
-              title={lang==="cs" ? "Switch to English" : "Přepnout do češtiny"}>
-              {lang==="cs" ? "🇬🇧" : "🇨🇿"}
-            </button>
+            <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+              <button style={{ ...S.btn("outline"), padding:"3px 8px", fontSize:14, lineHeight:1 }}
+                onClick={() => setFontSize(s => Math.max(11, s-1))} title="Zmenšit písmo">A-</button>
+              <span style={{ fontSize:10, color:"#475569", width:22, textAlign:"center" }}>{fontSize}</span>
+              <button style={{ ...S.btn("outline"), padding:"3px 8px", fontSize:14, lineHeight:1 }}
+                onClick={() => setFontSize(s => Math.min(17, s+1))} title="Zvětšit písmo">A+</button>
+            </div>
             {/* Dark/light toggle */}
             <button style={{ ...S.btn("outline"), padding:"5px 10px", fontSize:14 }}
               onClick={() => setDarkMode(d => !d)} title={darkMode ? "Světlý režim" : "Tmavý režim"}>
