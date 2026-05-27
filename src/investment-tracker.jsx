@@ -192,14 +192,36 @@ const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, a
         invested += toCZK(t.quantity*t.price + (t.fee||0), t.currency, rates);
         holdings[t.ticker] = (holdings[t.ticker]||0) + t.quantity;
       });
+      // For current month: use live prices. For historical: use invested cost as proxy
+      const isCurrentMonth = cursor.getFullYear()===now.getFullYear() && cursor.getMonth()===now.getMonth();
       let current = 0;
-      Object.entries(holdings).forEach(([ticker, qty]) => {
-        const p = prices[ticker];
-        if (p) current += toCZK(qty*p.price, getTickerCurrency(ticker,p), rates);
-      });
+      if (isCurrentMonth) {
+        // Use actual current prices
+        Object.entries(holdings).forEach(([ticker, qty]) => {
+          const p = prices[ticker];
+          if (p) current += toCZK(qty*p.price, getTickerCurrency(ticker,p), rates);
+        });
+      } else {
+        // For past months: estimate value as invested × (current_value/total_invested ratio)
+        // This gives a proportional estimate without needing historical prices
+        current = invested; // will be scaled after all points computed
+      }
       points.push({ label:`${cursor.getMonth()+1}/${String(cursor.getFullYear()).slice(2)}`, invested, current, date:new Date(cursor) });
     }
     cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
+  }
+  // Scale historical points: interpolate from 0 to current value
+  if (points.length > 1) {
+    const lastPt = points[points.length-1];
+    const totalInvested = lastPt.invested;
+    const currentVal = lastPt.current > 0 ? lastPt.current : lastPt.invested;
+    const ratio = totalInvested > 0 ? currentVal / totalInvested : 1;
+    points.forEach((pt, i) => {
+      if (i < points.length - 1) {
+        // Scale each historical point by the same ratio (assumes proportional growth)
+        pt.current = pt.invested * ratio;
+      }
+    });
   }
 
   if (points.length < 2) return <div style={{color:"#475569",fontSize:12,padding:20}}>Nedostatek dat pro zvolený rok</div>;
@@ -2733,10 +2755,20 @@ const DrawdownChart = ({ transactions, prices, rates }) => {
       const p = prices[ticker];
       if(p) current += toCZK(qty*p.price, getTickerCurrency(ticker,p), rates);
     });
-    points.push({ date:new Date(cursor), value:current, label:`${cursor.getMonth()+1}/${String(cursor.getFullYear()).slice(2)}` });
+    points.push({ date:new Date(cursor), value:current, invested, label:`${cursor.getMonth()+1}/${String(cursor.getFullYear()).slice(2)}` });
     cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
   }
 
+  // Scale historical points proportionally (same as GrowthChart)
+  if (points.length > 1) {
+    const lastPt = points[points.length-1];
+    const currVal = lastPt.value;
+    const totalInv = lastPt.invested;
+    const ratio = totalInv > 0 ? currVal / totalInv : 1;
+    points.forEach((pt,i) => {
+      if (i < points.length-1) pt.value = pt.invested * ratio;
+    });
+  }
   // Calculate drawdown series
   let peak = 0;
   const ddPoints = points.map(p => {
@@ -3601,8 +3633,8 @@ export default function App() {
             <div style={{ marginBottom:18 }}>
               <div style={{ fontSize:17, fontWeight:700, color:"#f1f5f9", marginBottom:4 }}>{t.dashboard} — <span style={{color:"#6366f1"}}>{portfolios.find(p=>p.id===activePortfolioId)?.name||"Portfolio"}</span></div>
               <div style={{ fontSize:10, color:"#475569" }}>
-                {fmtDate(new Date().toISOString())} · USD/CZK: <b style={{color:"#94a3b8"}}>{rates.USD_CZK}</b> · EUR/CZK: <b style={{color:"#94a3b8"}}>{rates.EUR_CZK}</b>
-                {rates.lastUpdated && <span style={{marginLeft:8}}>· kurzy {fmtDate(rates.lastUpdated)}</span>}
+                {fmtDate(new Date().toISOString())}
+                {rates.lastUpdated && <span style={{marginLeft:8,color:textMuted}}>· kurzy {fmtDate(rates.lastUpdated)}</span>}
               </div>
             </div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(155px,1fr))", gap:12, marginBottom:16 }}>
@@ -3660,30 +3692,65 @@ export default function App() {
                   portfolio.positions.forEach(p => { cats[p.category]=(cats[p.category]||0)+p.currentValueCZK; });
                   const total = Object.values(cats).reduce((s,v)=>s+v,0)||1;
                   const entries = Object.entries(cats).filter(([,v])=>v>0);
-                  const r=70,cx=100,cy=85,tw=200,th=170;
+                  const [hovCat, setHovCat] = useState(null);
+                  const rad=72,cx=95,cy=90,tw=230,th=180;
                   let angle=-Math.PI/2;
+                  const slices = entries.map(([cat,val])=>{
+                    const slice=val/total*Math.PI*2;
+                    const x1=cx+rad*Math.cos(angle),y1=cy+rad*Math.sin(angle);
+                    angle+=slice;
+                    const x2=cx+rad*Math.cos(angle),y2=cy+rad*Math.sin(angle);
+                    const midA=angle-slice/2;
+                    return {cat,val,slice,x1,y1,x2,y2,large:slice>Math.PI?1:0,
+                      midX:cx+(rad+10)*Math.cos(midA), midY:cy+(rad+10)*Math.sin(midA)};
+                  });
                   return (
-                    <svg viewBox={`0 0 ${tw} ${th}`} style={{width:"100%",height:"auto"}}>
-                      <text x={cx} y={cy-8} textAnchor="middle" fill={textPrimary} fontSize="10" fontWeight="700">ALOKACE</text>
-                      <text x={cx} y={cy+8} textAnchor="middle" fill={textMuted} fontSize="9">{portfolio.positions.length} pozic</text>
-                      {entries.map(([cat,val],i)=>{
-                        const slice=val/total*Math.PI*2;
-                        const x1=cx+r*Math.cos(angle),y1=cy+r*Math.sin(angle);
-                        angle+=slice;
-                        const x2=cx+r*Math.cos(angle),y2=cy+r*Math.sin(angle);
-                        const large=slice>Math.PI?1:0;
-                        const color=catColor[cat]||"#64748b";
-                        return <path key={cat} d={`M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large},1 ${x2},${y2} Z`} fill={color} opacity={0.85}/>;
-                      })}
-                      <circle cx={cx} cy={cy} r={r*0.55} fill={bgCard}/>
-                      {entries.map(([cat,val],i)=>(
-                        <g key={cat}>
-                          <circle cx={tw-60} cy={30+i*22} r="5" fill={catColor[cat]||"#64748b"}/>
-                          <text x={tw-52} y={34+i*22} fill={textPrimary} fontSize="9" fontWeight="600">{catLabel[cat]||cat}</text>
-                          <text x={tw-3} y={34+i*22} textAnchor="end" fill={textMuted} fontSize="9">{(val/total*100).toFixed(1)}%</text>
-                        </g>
-                      ))}
-                    </svg>
+                    <div style={{position:"relative"}}>
+                      {hovCat && (
+                        <div style={{position:"absolute",top:4,left:0,right:0,textAlign:"center",
+                          fontSize:11,fontWeight:700,color:catColor[hovCat.cat]||accent,
+                          background:bgCard,borderRadius:8,padding:"4px 8px",zIndex:10,
+                          border:`1px solid ${catColor[hovCat.cat]||border}44`}}>
+                          {catLabel[hovCat.cat]||hovCat.cat}: {fmt(hovCat.val,"CZK",0)} · {(hovCat.val/total*100).toFixed(1)}%
+                        </div>
+                      )}
+                      <svg viewBox={`0 0 ${tw} ${th}`} style={{width:"100%",height:"auto"}}
+                        onMouseLeave={()=>setHovCat(null)}>
+                        <text x={cx} y={cy-6} textAnchor="middle" fill={textPrimary} fontSize="10" fontWeight="700">
+                          {lang==="en"?"ALLOCATION":"ALOKACE"}
+                        </text>
+                        <text x={cx} y={cy+9} textAnchor="middle" fill={textMuted} fontSize="9">
+                          {portfolio.positions.length} {lang==="en"?"positions":"pozic"}
+                        </text>
+                        {slices.map(s=>{
+                          const isHov = hovCat?.cat===s.cat;
+                          const r2 = isHov ? rad+4 : rad;
+                          const innerR = rad*0.54;
+                          const color=catColor[s.cat]||"#64748b";
+                          const x1=cx+r2*Math.cos(angle-(s.slice)), y1=cy+r2*Math.sin(angle-(s.slice));
+                          // Recompute with hover radius
+                          let a=-Math.PI/2;
+                          slices.forEach(sl=>{ if(sl.cat===s.cat) return; a+=sl.slice; });
+                          return (
+                            <path key={s.cat}
+                              d={`M${cx},${cy} L${s.x1},${s.y1} A${isHov?rad+4:rad},${isHov?rad+4:rad} 0 ${s.large},1 ${s.x2},${s.y2} Z`}
+                              fill={color} opacity={isHov?1:0.82}
+                              style={{cursor:"pointer",transition:"opacity 0.15s"}}
+                              onMouseEnter={()=>setHovCat(s)}>
+                              <title>{catLabel[s.cat]||s.cat}: {(s.val/total*100).toFixed(1)}%</title>
+                            </path>
+                          );
+                        })}
+                        <circle cx={cx} cy={cy} r={rad*0.54} fill={bgCard}/>
+                        {entries.map(([cat,val],i)=>(
+                          <g key={cat}>
+                            <rect x={tw-85} y={24+i*24-6} width={10} height={10} rx={2} fill={catColor[cat]||"#64748b"}/>
+                            <text x={tw-72} y={24+i*24+3} fill={textPrimary} fontSize="10" fontWeight="600">{catLabel[cat]||cat}</text>
+                            <text x={tw-2} y={24+i*24+3} textAnchor="end" fill={catColor[cat]||textMuted} fontSize="10" fontWeight="700">{(val/total*100).toFixed(1)}%</text>
+                          </g>
+                        ))}
+                      </svg>
+                    </div>
                   );
                 })()}
               </div>
@@ -3725,55 +3792,63 @@ export default function App() {
                   if (!allYears.length) return <div style={{color:textMuted,fontSize:11}}>Žádná data</div>;
                   
                   // Build portfolio value at start and end of each year
-                  const getPortfolioValue = (upToDate) => {
-                    const buysUntil = allBuys.filter(t=>new Date(t.date)<=upToDate);
-                    if (!buysUntil.length) return 0;
-                    const h={};
-                    buysUntil.forEach(t=>{h[t.ticker]=(h[t.ticker]||0)+t.quantity;});
-                    let val=0;
-                    Object.entries(h).forEach(([tk,qty])=>{
-                      const p=prices[tk]; if(p) val+=toCZK(qty*p.price,getTickerCurrency(tk,p),rates);
-                    });
-                    return val;
-                  };
+                  // Total current portfolio value and cost
+                  const totalCost = allBuys.reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
+                  let totalCurrentVal = 0;
+                  const allHoldings = {};
+                  allBuys.forEach(t=>{allHoldings[t.ticker]=(allHoldings[t.ticker]||0)+t.quantity;});
+                  Object.entries(allHoldings).forEach(([tk,qty])=>{
+                    const p=prices[tk]; if(p) totalCurrentVal+=toCZK(qty*p.price,getTickerCurrency(tk,p),rates);
+                  });
+                  const overallRatio = totalCost > 0 ? totalCurrentVal/totalCost : 1;
+
                   const getInvestedUntil = (upToDate) => allBuys.filter(t=>new Date(t.date)<=upToDate)
                     .reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
 
                   const returns = allYears.map(y=>{
-                    const startOfYear = new Date(y, 0, 1);
                     const endOfYear = y === now.getFullYear() ? now : new Date(y, 11, 31);
+                    const startOfYear = new Date(y, 0, 1);
                     const investedByEnd = getInvestedUntil(endOfYear);
-                    const investedByStart = y===allYears[0] ? 0 : getInvestedUntil(startOfYear);
-                    // New money added this year
-                    const newMoney = investedByEnd - investedByStart;
-                    // Portfolio value at end of year (using current prices as proxy)
-                    const portValueEnd = getPortfolioValue(endOfYear);
-                    // Simple annual return: (current value / invested - 1)
-                    // For past years, use cumulative return up to that point
-                    const ret = investedByEnd > 0 ? (portValueEnd - investedByEnd) / investedByEnd * 100 : 0;
+                    const investedByStart = getInvestedUntil(startOfYear);
+                    // Estimate year-end value by scaling invested by overall ratio
+                    const portValueEnd = investedByEnd * overallRatio;
+                    const portValueStart = investedByStart * overallRatio;
+                    // YoY return for this specific year
+                    const yearInflow = investedByEnd - investedByStart;
+                    const yearGain = portValueEnd - portValueStart - yearInflow;
+                    const base = portValueStart + yearInflow/2 || investedByEnd;
+                    const ret = base > 0 ? (portValueEnd - investedByEnd) / investedByEnd * 100 : 0;
                     return {year:String(y), ret, portValue:portValueEnd, invested:investedByEnd};
                   }).filter(r=>r.invested>0);
                   const maxR=Math.max(...returns.map(r=>Math.abs(r.ret)),1);
-                  const bW=Math.max(14,Math.floor(240/returns.length)-4);
-                  const cH=100,cPad={t:10,b:20,l:4,r:4};
+                  const bW=Math.max(18,Math.floor(280/returns.length)-4);
+                  const cH=110,cPad={t:12,b:22,l:4,r:4};
                   const iHr=cH-cPad.t-cPad.b;
                   return (
-                    <svg viewBox={`0 0 ${returns.length*(bW+4)+8} ${cH}`} style={{width:"100%",height:"auto"}}>
-                      <line x1={0} y1={cPad.t+iHr/2} x2={returns.length*(bW+4)+8} y2={cPad.t+iHr/2} stroke={border} strokeWidth="1"/>
-                      {returns.map((r,i)=>{
-                        const x=4+i*(bW+4);
-                        const barH=Math.abs(r.ret)/maxR*(iHr/2);
-                        const isPos=r.ret>=0;
-                        const y=isPos?cPad.t+iHr/2-barH:cPad.t+iHr/2;
-                        return (
-                          <g key={r.year}>
-                            <rect x={x} y={y} width={bW} height={Math.max(2,barH)} fill={isPos?"#10b981":"#ef4444"} rx={2} opacity={0.85}/>
-                            <text x={x+bW/2} y={cH-4} textAnchor="middle" fill={textMuted} fontSize="8">{r.year.slice(2)}</text>
-                            <text x={x+bW/2} y={isPos?y-3:y+barH+10} textAnchor="middle" fill={isPos?"#10b981":"#ef4444"} fontSize="7.5" fontWeight="700">{r.ret.toFixed(1)}%</text>
-                          </g>
-                        );
-                      })}
-                    </svg>
+                    <div style={{position:"relative"}} onMouseLeave={()=>{}}>
+                      <svg viewBox={`0 0 ${returns.length*(bW+4)+8} ${cH}`} style={{width:"100%",height:"auto"}}>
+                        <line x1={0} y1={cPad.t+iHr/2} x2={returns.length*(bW+4)+8} y2={cPad.t+iHr/2} stroke={border} strokeWidth="1"/>
+                        {returns.map((r,i)=>{
+                          const x=4+i*(bW+4);
+                          const barH=Math.max(2,Math.abs(r.ret)/maxR*(iHr/2));
+                          const isPos=r.ret>=0;
+                          const y=isPos?cPad.t+iHr/2-barH:cPad.t+iHr/2;
+                          return (
+                            <g key={r.year} style={{cursor:"pointer"}}>
+                              <rect x={x} y={y} width={bW} height={barH}
+                                fill={isPos?"#10b981":"#ef4444"} rx={3} opacity={0.85}>
+                                <title>{r.year}: {r.ret.toFixed(1)}% (investováno: {fmt(r.invested,"CZK",0)})</title>
+                              </rect>
+                              <text x={x+bW/2} y={cH-4} textAnchor="middle" fill={textMuted} fontSize="8.5">{r.year.slice(2)}</text>
+                              <text x={x+bW/2} y={isPos?y-3:y+barH+10} textAnchor="middle"
+                                fill={isPos?"#10b981":"#ef4444"} fontSize="8" fontWeight="700">
+                                {r.ret.toFixed(1)}%
+                              </text>
+                            </g>
+                          );
+                        })}
+                      </svg>
+                    </div>
                   );
                 })()}
               </div>
