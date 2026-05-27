@@ -1762,7 +1762,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
               <div style={{fontSize:11,color:"#475569",marginTop:2}}>{data.sector} · {data.currency} · Tržní cap: <b style={{color:"#94a3b8"}}>{data.marketCap?.toFixed(1)}B</b></div>
               {data.summary && <div style={{fontSize:11,color:"#64748b",marginTop:6,maxWidth:600,lineHeight:1.5,fontStyle:"italic"}}>"{data.summary}"</div>}
             </div>
-
+            <div style={{fontSize:22,fontWeight:800,color:"#6366f1"}}>{data.currentPrice} {data.currency}</div>
           </div>
 
           {/* Chart tabs */}
@@ -2888,12 +2888,6 @@ export default function App() {
           if (info.shortName) newNames[tk] = info.shortName;
         });
         if (Object.keys(newNames).length) setTickerNames(prev => ({...prev,...newNames}));
-        // Cache shortNames from Yahoo Finance
-        const newNames = {};
-        Object.entries(data.prices).forEach(([tk, info]) => {
-          if (info.shortName) newNames[tk] = info.shortName;
-        });
-        if (Object.keys(newNames).length) setTickerNames(prev => ({...prev,...newNames}));
         setPricesStatus("ok");
       } else {
         setPricesStatus("error");
@@ -2920,11 +2914,8 @@ export default function App() {
         return updated;
       });
     }
-    // Initial fetch prices (shortNames will be cached from response)
+    // Initial fetch
     fetchPrices(portfolioTickers);
-    // Also lookup names for tickers that don't have them yet
-    const missingNames = portfolioTickers.filter(t => !tickerNames[t]);
-    missingNames.forEach(t => setTimeout(() => lookupTickerName(t), 200));
     // Refresh every 15 min
     const interval = setInterval(() => fetchPrices(portfolioTickers), 15 * 60 * 1000);
     return () => clearInterval(interval);
@@ -2934,26 +2925,17 @@ export default function App() {
   const [tickerNames, setTickerNames] = useState({}); // cache: AAPL -> "Apple Inc."
 
   const lookupTickerName = useCallback(async (ticker) => {
-    const tk = ticker.toUpperCase();
-    if (!tk || tk.length < 1 || tickerNames[tk]) return;
+    if (!ticker || ticker.length < 1 || tickerNames[ticker]) return;
     try {
-      // Try prices API first (has shortName from Yahoo)
       const res = await fetch("/api/prices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tickers: [tk] }),
+        body: JSON.stringify({ tickers: [ticker] }),
       });
       const data = await res.json();
-      const info = data.prices?.[tk];
-      if (info?.shortName) {
-        setTickerNames(prev => ({ ...prev, [tk]: info.shortName }));
-        return;
-      }
-      // Fallback: chart API also returns shortName
-      const res2 = await fetch(`/api/chart?ticker=${encodeURIComponent(tk)}&range=1d`);
-      const data2 = await res2.json();
-      if (data2?.shortName && data2.shortName !== tk) {
-        setTickerNames(prev => ({ ...prev, [tk]: data2.shortName }));
+      const info = data.prices?.[ticker.toUpperCase()];
+      if (info?.shortName || info?.name) {
+        setTickerNames(prev => ({ ...prev, [ticker.toUpperCase()]: info.shortName || info.name }));
       }
     } catch {}
   }, [tickerNames]);
