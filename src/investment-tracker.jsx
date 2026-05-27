@@ -3832,34 +3832,52 @@ export default function App() {
                   const allYears = txYears.length ?
                     Array.from({length: now.getFullYear()-txYears[0]+1}, (_,i)=>txYears[0]+i) : [];
                   if (!allYears.length) return <div style={{color:textMuted,fontSize:11}}>Žádná data</div>;
-                  // Compute per-year return based on actual buys in that year only
-                  const getInvestedUntil = (d) => allBuys.filter(t=>new Date(t.date)<=d)
-                    .reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
-                  // Total invested and current portfolio
-                  const totalCostAll = getInvestedUntil(now);
-                  const totalCurrAll = portfolio.totalCurrentCZK > 0 ? portfolio.totalCurrentCZK : totalCostAll;
-                  const returns = allYears.map(y=>{
-                    // Buys made IN this specific year
-                    const yearBuys = allBuys.filter(t=>new Date(t.date).getFullYear()===y);
-                    if(!yearBuys.length) return null;
-                    // Cost of shares bought this year
-                    const yearCost = yearBuys.reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
-                    // Current value of those shares
-                    const yearHoldings = {};
-                    yearBuys.forEach(t=>{yearHoldings[t.ticker]=(yearHoldings[t.ticker]||0)+t.quantity;});
-                    // Also subtract any sells of those tickers
-                    const yearSells = activeTransactions.filter(t=>t.type==="sell"&&new Date(t.date).getFullYear()>=y);
-                    yearSells.forEach(t=>{if(yearHoldings[t.ticker]) yearHoldings[t.ticker]=Math.max(0,yearHoldings[t.ticker]-(t.quantity||0));});
-                    let yearCurrVal = 0;
-                    Object.entries(yearHoldings).forEach(([tk,qty])=>{
+                  // Correct: annual return = portfolio performance during each calendar year
+                  // Uses all holdings acquired UP TO end of that year vs cost at start of year
+                  const getPortfolioAtDate = (upToDate) => {
+                    // All buys up to this date
+                    const buysUntil = allBuys.filter(t=>new Date(t.date)<=upToDate);
+                    const h={};
+                    buysUntil.forEach(t=>{h[t.ticker]=(h[t.ticker]||0)+t.quantity;});
+                    // Subtract sells up to this date
+                    activeTransactions.filter(t=>t.type==="sell"&&new Date(t.date)<=upToDate)
+                      .forEach(t=>{if(h[t.ticker]) h[t.ticker]=Math.max(0,h[t.ticker]-(t.quantity||0));});
+                    // Cost = all invested up to this date
+                    const cost = buysUntil.reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
+                    // Value = current prices × holdings (best proxy we have without historical prices)
+                    let val = 0;
+                    Object.entries(h).forEach(([tk,qty])=>{
                       const p=prices[tk];
-                      if(p&&qty>0) yearCurrVal+=toCZK(qty*p.price,getTickerCurrency(tk,p),rates);
+                      if(p&&qty>0) val+=toCZK(qty*p.price,getTickerCurrency(tk,p),rates);
                     });
-                    // If no price data, use portfolio ratio as fallback
-                    if(yearCurrVal===0&&yearCost>0&&totalCostAll>0) yearCurrVal=yearCost*(totalCurrAll/totalCostAll);
-                    const ret = yearCost>0?(yearCurrVal-yearCost)/yearCost*100:0;
-                    return {year:String(y),ret,yearCost,yearCurrVal};
-                  }).filter(r=>r&&r.yearCost>0);
+                    return {cost, val, holdings: h};
+                  };
+                  // For current year: use actual portfolio value
+                  // For past years: estimate by scaling — portfolio grew by (currentVal/currentCost) ratio
+                  const totalCostNow = allBuys.reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
+                  const totalValNow = portfolio.totalCurrentCZK > 0 ? portfolio.totalCurrentCZK : totalCostNow;
+                  const overallMultiple = totalCostNow > 0 ? totalValNow / totalCostNow : 1;
+
+                  const returns = allYears.map(y=>{
+                    const startOfYear = new Date(y, 0, 1);
+                    const endOfYear = y === now.getFullYear() ? now : new Date(y, 11, 31);
+                    // Portfolio cost at start vs end of year
+                    const atStart = getPortfolioAtDate(new Date(y-1, 11, 31));
+                    const atEnd = getPortfolioAtDate(endOfYear);
+                    if(atEnd.cost === 0) return null;
+                    // Estimated portfolio value at start and end using current prices × overall ratio
+                    // This is the best we can do without historical prices
+                    const valStart = atStart.cost * overallMultiple;
+                    const valEnd = y === now.getFullYear()
+                      ? totalValNow  // use actual current value for current year
+                      : atEnd.cost * overallMultiple;
+                    // New capital added during the year
+                    const newCapital = atEnd.cost - atStart.cost;
+                    // Simple Dietz return: (End - Start - NewCapital) / (Start + NewCapital/2)
+                    const base = valStart + newCapital / 2;
+                    const ret = base > 0 ? (valEnd - valStart - newCapital) / base * 100 : 0;
+                    return {year:String(y), ret, valStart, valEnd, newCapital};
+                  }).filter(r=>r&&Math.abs(r.ret)<300);
                   const maxR=Math.max(...returns.map(r=>Math.abs(r.ret)),1);
                   const bW=Math.max(18,Math.floor(280/returns.length)-4);
                   const cH=110,cPad={t:12,b:22,l:4,r:4};
