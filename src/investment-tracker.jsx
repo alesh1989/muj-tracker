@@ -2920,6 +2920,7 @@ export default function App() {
   };
   const [loaded, setLoaded] = useState(false);
   const [divCalYear, setDivCalYear] = useState(new Date().getFullYear());
+  const [hovCat, setHovCat] = useState(null);
   const [ratesStatus, setRatesStatus] = useState("idle"); // idle | loading | ok | error
 
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | ok | error | offline
@@ -3692,7 +3693,6 @@ export default function App() {
                   portfolio.positions.forEach(p => { cats[p.category]=(cats[p.category]||0)+p.currentValueCZK; });
                   const total = Object.values(cats).reduce((s,v)=>s+v,0)||1;
                   const entries = Object.entries(cats).filter(([,v])=>v>0);
-                  const [hovCat, setHovCat] = useState(null);
                   const rad=72,cx=95,cy=90,tw=230,th=180;
                   let angle=-Math.PI/2;
                   const slices = entries.map(([cat,val])=>{
