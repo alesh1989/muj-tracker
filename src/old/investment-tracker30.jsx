@@ -412,13 +412,9 @@ const AnnualReturnChart = ({ transactions, prices, rates }) => {
 const ValuationAnalyzer = ({ rates }) => {
   const [method, setMethod] = useState("dcf");
   const [ticker, setTicker] = useState("AAPL");
-  const [tickerInput, setTickerInput] = useState("AAPL");
   const [currency, setCurrency] = useState("USD");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [fetchingPrice, setFetchingPrice] = useState(false);
-  const [livePrice, setLivePrice] = useState(null);
-  const [priceError, setPriceError] = useState("");
 
   // DCF inputs
   const [dcf, setDcf] = useState({ currentPrice: 213.5, fcf: 100, shares: 15400, growthRate1: 12, growthRate2: 6, terminalRate: 3, discountRate: 10, years1: 5, years2: 5, cash: 162, debt: 108 });
@@ -427,30 +423,6 @@ const ValuationAnalyzer = ({ rates }) => {
   const [buffett, setBuffett] = useState({ bookValue: 4.0, roe: 35, requiredReturn: 15, years: 10, terminalPE: 15, currentPrice: 213.5, eps: 6.42 });
   // Technical
   const [tech, setTech] = useState({ prices52wHigh: 237.2, prices52wLow: 164.1, currentPrice: 213.5, ma50: 201.3, ma200: 195.8, rsi: 58, volume: 65, avgVolume: 58, pe: 33.2, sectorPE: 28 });
-
-  // Fetch live price when ticker changes
-  const fetchLivePrice = async (tk) => {
-    if (!tk) return;
-    setFetchingPrice(true); setPriceError("");
-    try {
-      const res = await fetch(`/api/chart?ticker=${encodeURIComponent(tk)}&range=1d`);
-      const data = await res.json();
-      if (data.currentPrice || data.candles?.length) {
-        const price = data.currentPrice || data.candles[data.candles.length-1]?.c;
-        const curr = data.currency || "USD";
-        setLivePrice(price);
-        setCurrency(curr);
-        // Auto-fill current price in all models
-        setDcf(p=>({...p, currentPrice:parseFloat(price.toFixed(2))}));
-        setGraham(p=>({...p, currentPrice:parseFloat(price.toFixed(2))}));
-        setBuffett(p=>({...p, currentPrice:parseFloat(price.toFixed(2))}));
-        setTech(p=>({...p, currentPrice:parseFloat(price.toFixed(2))}));
-      } else {
-        setPriceError("Cenu se nepodařilo načíst — zadej ručně");
-      }
-    } catch(e) { setPriceError("Chyba: " + e.message); }
-    setFetchingPrice(false);
-  };
 
   const runDCF = () => {
     const d = dcf;
@@ -1763,7 +1735,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
   })).filter(d => d.value !== null);
 
   const CHARTS = [
-    { id:"overview", label:t.dashboard },
+    { id:"overview", label:"Přehled" },
     { id:"revenue", label:"Revenue & Marže" },
     { id:"profit", label:"Ziskovost" },
     { id:"cashflow", label:"Free Cash Flow" },
@@ -2527,7 +2499,7 @@ function AdminPanel({ currentUser, onClose, S }) {
 const T = {
   cs: {
     // Nav tabs
-    dashboard:t.dashboard, portfolio:"Portfolio", transakce:"Transakce",
+    dashboard:"Přehled", portfolio:"Portfolio", transakce:"Transakce",
     cashflow:"Vklady/Výběry", dividendy:"Dividendy", novinky:"Novinky",
     analyza:"Analýza", fi:"FI Kalkulačka", nastaveni:"Nastavení",
     // Dashboard
@@ -3599,7 +3571,7 @@ export default function App() {
         {tab === "dashboard" && (
           <>
             <div style={{ marginBottom:18 }}>
-              <div style={{ fontSize:17, fontWeight:700, color:"#f1f5f9", marginBottom:4 }}>{t.dashboard} — <span style={{color:"#6366f1"}}>{portfolios.find(p=>p.id===activePortfolioId)?.name||"Portfolio"}</span></div>
+              <div style={{ fontSize:17, fontWeight:700, color:"#f1f5f9", marginBottom:4 }}>Přehled — <span style={{color:"#6366f1"}}>{portfolios.find(p=>p.id===activePortfolioId)?.name||"Portfolio"}</span></div>
               <div style={{ fontSize:10, color:"#475569" }}>
                 {fmtDate(new Date().toISOString())} · USD/CZK: <b style={{color:"#94a3b8"}}>{rates.USD_CZK}</b> · EUR/CZK: <b style={{color:"#94a3b8"}}>{rates.EUR_CZK}</b>
                 {rates.lastUpdated && <span style={{marginLeft:8}}>· kurzy {fmtDate(rates.lastUpdated)}</span>}
@@ -3711,48 +3683,25 @@ export default function App() {
               <div style={S.card}>
                 <div style={S.sectionTitle}>Roční výnosy</div>
                 {(() => {
-                  // Roční výnos = (aktuální hodnota - celkové investice) / celkové investice
-                  // Zobrazujeme kumulativní výnos k dnešnímu dni podle roku prvního nákupu
-                  const allBuys = activeTransactions.filter(t=>t.type==="buy");
-                  if (!allBuys.length) return <div style={{color:textMuted,fontSize:11}}>Žádná data</div>;
-                  // Get all years that have transactions
-                  const txYears = [...new Set(allBuys.map(t=>new Date(t.date).getFullYear()))].sort();
-                  // For each year: compute portfolio value if you had only bought in that year or earlier
-                  // Better: show each calendar year's return (start of year → end of year value)
-                  const now = new Date();
-                  const allYears = txYears.length ? 
-                    Array.from({length: now.getFullYear() - txYears[0] + 1}, (_,i) => txYears[0]+i) : [];
-                  if (!allYears.length) return <div style={{color:textMuted,fontSize:11}}>Žádná data</div>;
-                  
-                  // Build portfolio value at start and end of each year
-                  const getPortfolioValue = (upToDate) => {
-                    const buysUntil = allBuys.filter(t=>new Date(t.date)<=upToDate);
-                    if (!buysUntil.length) return 0;
-                    const h={};
-                    buysUntil.forEach(t=>{h[t.ticker]=(h[t.ticker]||0)+t.quantity;});
-                    let val=0;
-                    Object.entries(h).forEach(([tk,qty])=>{
-                      const p=prices[tk]; if(p) val+=toCZK(qty*p.price,getTickerCurrency(tk,p),rates);
+                  const byYear={};
+                  activeTransactions.filter(t=>t.type==="buy").forEach(t=>{
+                    const y=new Date(t.date).getFullYear();
+                    if(!byYear[y]) byYear[y]={cost:0};
+                    byYear[y].cost+=toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates);
+                  });
+                  const years=Object.keys(byYear).sort();
+                  if(!years.length) return <div style={{color:textMuted,fontSize:11}}>Žádná data</div>;
+                  const returns=years.map(y=>{
+                    const positions=activeTransactions.filter(t=>t.type==="buy"&&new Date(t.date).getFullYear()<=parseInt(y));
+                    const holdings={};
+                    positions.forEach(t=>{holdings[t.ticker]=(holdings[t.ticker]||0)+t.quantity;});
+                    let currVal=0;
+                    Object.entries(holdings).forEach(([tk,qty])=>{
+                      const p=prices[tk]; if(p) currVal+=toCZK(qty*p.price,getTickerCurrency(tk,p),rates);
                     });
-                    return val;
-                  };
-                  const getInvestedUntil = (upToDate) => allBuys.filter(t=>new Date(t.date)<=upToDate)
-                    .reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
-
-                  const returns = allYears.map(y=>{
-                    const startOfYear = new Date(y, 0, 1);
-                    const endOfYear = y === now.getFullYear() ? now : new Date(y, 11, 31);
-                    const investedByEnd = getInvestedUntil(endOfYear);
-                    const investedByStart = y===allYears[0] ? 0 : getInvestedUntil(startOfYear);
-                    // New money added this year
-                    const newMoney = investedByEnd - investedByStart;
-                    // Portfolio value at end of year (using current prices as proxy)
-                    const portValueEnd = getPortfolioValue(endOfYear);
-                    // Simple annual return: (current value / invested - 1)
-                    // For past years, use cumulative return up to that point
-                    const ret = investedByEnd > 0 ? (portValueEnd - investedByEnd) / investedByEnd * 100 : 0;
-                    return {year:String(y), ret, portValue:portValueEnd, invested:investedByEnd};
-                  }).filter(r=>r.invested>0);
+                    const invested=positions.reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
+                    return {year:y,ret:invested>0?(currVal-invested)/invested*100:0};
+                  });
                   const maxR=Math.max(...returns.map(r=>Math.abs(r.ret)),1);
                   const bW=Math.max(14,Math.floor(240/returns.length)-4);
                   const cH=100,cPad={t:10,b:20,l:4,r:4};
@@ -4674,7 +4623,7 @@ export default function App() {
         {/* ─── NASTAVENÍ ─────────────────────────────────────────────────── */}
         {tab === "nastaveni" && (
           <>
-            <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:14 }}>{t.settingsTitle}</div>
+            <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:14 }}>Nastavení</div>
             <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:14 }}>
               <div style={S.card}>
                 <div style={S.sectionTitle}>☁ Supabase sync</div>
