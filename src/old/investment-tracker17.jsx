@@ -1364,7 +1364,7 @@ function CandlestickChart({ ticker: initialTicker, S }) {
   const PAD = { t: 20, b: 36, l: 62, r: 10, volGap: 8 };
   const iW = W - PAD.l - PAD.r;
   const iH = H - PAD.t - PAD.b;
-  const totalH = H + VOL_H + PAD.volGap + PAD.b; // include bottom padding for X labels
+  const totalH = H + VOL_H + PAD.volGap;
 
   const candles = data?.candles || [];
 
@@ -1460,7 +1460,6 @@ function CandlestickChart({ ticker: initialTicker, S }) {
               <div style={{ fontSize:13, fontWeight:600, color:priceChange>=0?upC:dnC }}>
                 {priceChange>=0?"+":""}{fmtPrice(priceChange)} ({pctChange>=0?"+":""}{pctChange.toFixed(2)}%)
               </div>
-              <div style={{fontSize:10,color:mutedC}}>· {range.toUpperCase()}</div>
             </>
           )}
           {tooltip && (
@@ -1557,11 +1556,15 @@ function CandlestickChart({ ticker: initialTicker, S }) {
                 stroke="#ffffff" strokeWidth="0.5" strokeDasharray="3,3" opacity="0.4"/>;
             })()}
 
-            {/* Current price line - only show if within chart range */}
-            {data?.currentPrice && data.currentPrice >= minL && data.currentPrice <= maxH && (
+            {/* Current price line */}
+            {data?.currentPrice && (
               <g>
                 <line x1={PAD.l} y1={yS(data.currentPrice)} x2={W-PAD.r} y2={yS(data.currentPrice)}
-                  stroke="#6c63ff" strokeWidth="1" strokeDasharray="4,3" opacity="0.6"/>
+                  stroke="#6c63ff" strokeWidth="1" strokeDasharray="4,3" opacity="0.8"/>
+                <rect x={W-PAD.r} y={yS(data.currentPrice)-8} width={PAD.r+2} height={16} fill="#6c63ff" rx="2"/>
+                <text x={W-PAD.r+1} y={yS(data.currentPrice)+4} fill="#fff" fontSize="7.5" fontWeight="700">
+                  {data.currentPrice.toFixed(2)}
+                </text>
               </g>
             )}
 
@@ -1572,10 +1575,10 @@ function CandlestickChart({ ticker: initialTicker, S }) {
             <line x1={PAD.l} y1={PAD.t} x2={PAD.l} y2={H} stroke={gridC} strokeWidth="1"/>
             <line x1={PAD.l} y1={H} x2={W-PAD.r} y2={H} stroke={gridC} strokeWidth="1"/>
           </svg>
-          <div style={{ display:"flex", gap:16, padding:"4px 8px 8px", fontSize:10, color:mutedC }}>
+          <div style={{ display:"flex", gap:16, padding:"4px 8px", fontSize:10, color:mutedC }}>
             <span><span style={{color:upC}}>█</span> Růst</span>
             <span><span style={{color:dnC}}>█</span> Pokles</span>
-            <span>· {range.toUpperCase()} · {candles.length} period</span>
+            <span>Svíčky · {range.toUpperCase()} · {candles.length} period</span>
           </div>
         </div>
       )}
@@ -1755,6 +1758,12 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
 
       {data && !loading && (
         <>
+          {/* Mini price chart inline */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:10,color:"#5a7399",marginBottom:8,letterSpacing:"0.08em",textTransform:"uppercase"}}>Cenový vývoj</div>
+            <CandlestickChart ticker={data.ticker} S={S} />
+          </div>
+
           {/* Header */}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:10}}>
             <div>
