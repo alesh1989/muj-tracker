@@ -452,24 +452,42 @@ const ValuationAnalyzer = ({ rates }) => {
   // Fetch live price when ticker changes
   const fetchLivePrice = async (tk) => {
     if (!tk) return;
-    setFetchingPrice(true); setPriceError("");
+    setFetchingPrice(true); setPriceError(""); setLivePrice(null);
     try {
+      // Try chart API first
+      let price = null, curr = "USD";
       const res = await fetch(`/api/chart?ticker=${encodeURIComponent(tk)}&range=1d`);
       const data = await res.json();
-      if (data.currentPrice || data.candles?.length) {
-        const price = data.currentPrice || data.candles[data.candles.length-1]?.c;
-        const curr = data.currency || "USD";
-        setLivePrice(price);
-        setCurrency(curr);
-        // Auto-fill current price in all models
-        setDcf(p=>({...p, currentPrice:parseFloat(price.toFixed(2))}));
-        setGraham(p=>({...p, currentPrice:parseFloat(price.toFixed(2))}));
-        setBuffett(p=>({...p, currentPrice:parseFloat(price.toFixed(2))}));
-        setTech(p=>({...p, currentPrice:parseFloat(price.toFixed(2))}));
-      } else {
-        setPriceError("Cenu se nepodařilo načíst — zadej ručně");
+      if (data.currentPrice && data.currentPrice > 0) {
+        price = data.currentPrice;
+        curr = data.currency || "USD";
+      } else if (data.candles?.length) {
+        price = data.candles[data.candles.length-1]?.c;
+        curr = data.currency || "USD";
       }
-    } catch(e) { setPriceError("Chyba: " + e.message); }
+      // Fallback: prices API
+      if (!price || price === 0) {
+        const res2 = await fetch("/api/prices", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({tickers:[tk.toUpperCase()]})
+        });
+        const d2 = await res2.json();
+        const p2 = d2.prices?.[tk.toUpperCase()];
+        if (p2?.price > 0) { price = p2.price; curr = p2.currency || "USD"; }
+      }
+      if (price && price > 0) {
+        const p = parseFloat(price.toFixed(4));
+        setLivePrice(p);
+        setCurrency(curr);
+        setDcf(prev=>({...prev, currentPrice:p}));
+        setGraham(prev=>({...prev, currentPrice:p}));
+        setBuffett(prev=>({...prev, currentPrice:p}));
+        setTech(prev=>({...prev, currentPrice:p}));
+        setPriceError("");
+      } else {
+        setPriceError("Cenu se nepodařilo načíst — zadej ručně do pole Aktuální cena");
+      }
+    } catch(e) { setPriceError("Chyba při načítání ceny: " + e.message); }
     setFetchingPrice(false);
   };
 
@@ -3796,19 +3814,34 @@ export default function App() {
                   const allYears = txYears.length ?
                     Array.from({length: now.getFullYear()-txYears[0]+1}, (_,i)=>txYears[0]+i) : [];
                   if (!allYears.length) return <div style={{color:textMuted,fontSize:11}}>Žádná data</div>;
-                  const totalCost = allBuys.reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
-                  // Use actual portfolio value from calculation
-                  const totalCurrentVal = portfolio.totalCurrentCZK > 0 ? portfolio.totalCurrentCZK : totalCost;
-                  const overallRatio = totalCost>0 && totalCurrentVal>0 ? totalCurrentVal/totalCost : 1;
+                  // Compute per-year return based on actual buys in that year only
                   const getInvestedUntil = (d) => allBuys.filter(t=>new Date(t.date)<=d)
                     .reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
+                  // Total invested and current portfolio
+                  const totalCostAll = getInvestedUntil(now);
+                  const totalCurrAll = portfolio.totalCurrentCZK > 0 ? portfolio.totalCurrentCZK : totalCostAll;
                   const returns = allYears.map(y=>{
-                    const endOfYear = y===now.getFullYear()?now:new Date(y,11,31);
-                    const invested = getInvestedUntil(endOfYear);
-                    const portVal = invested * overallRatio;
-                    const ret = invested>0?(portVal-invested)/invested*100:0;
-                    return {year:String(y),ret,invested};
-                  }).filter(r=>r.invested>0&&Math.abs(r.ret)<500);
+                    // Buys made IN this specific year
+                    const yearBuys = allBuys.filter(t=>new Date(t.date).getFullYear()===y);
+                    if(!yearBuys.length) return null;
+                    // Cost of shares bought this year
+                    const yearCost = yearBuys.reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
+                    // Current value of those shares
+                    const yearHoldings = {};
+                    yearBuys.forEach(t=>{yearHoldings[t.ticker]=(yearHoldings[t.ticker]||0)+t.quantity;});
+                    // Also subtract any sells of those tickers
+                    const yearSells = activeTransactions.filter(t=>t.type==="sell"&&new Date(t.date).getFullYear()>=y);
+                    yearSells.forEach(t=>{if(yearHoldings[t.ticker]) yearHoldings[t.ticker]=Math.max(0,yearHoldings[t.ticker]-(t.quantity||0));});
+                    let yearCurrVal = 0;
+                    Object.entries(yearHoldings).forEach(([tk,qty])=>{
+                      const p=prices[tk];
+                      if(p&&qty>0) yearCurrVal+=toCZK(qty*p.price,getTickerCurrency(tk,p),rates);
+                    });
+                    // If no price data, use portfolio ratio as fallback
+                    if(yearCurrVal===0&&yearCost>0&&totalCostAll>0) yearCurrVal=yearCost*(totalCurrAll/totalCostAll);
+                    const ret = yearCost>0?(yearCurrVal-yearCost)/yearCost*100:0;
+                    return {year:String(y),ret,yearCost,yearCurrVal};
+                  }).filter(r=>r&&r.yearCost>0);
                   const maxR=Math.max(...returns.map(r=>Math.abs(r.ret)),1);
                   const bW=Math.max(18,Math.floor(280/returns.length)-4);
                   const cH=110,cPad={t:12,b:22,l:4,r:4};
@@ -3837,12 +3870,6 @@ export default function App() {
                   );
                 })()}
               </div>
-            </div>
-
-            {/* Drawdown Analysis */}
-            <div style={S.card}>
-              <div style={S.sectionTitle}>{lang==="en"?"Drawdown Analysis":"Drawdown analýza"}</div>
-              <DrawdownChart transactions={activeTransactions} prices={prices} rates={rates} portfolioCurrentCZK={portfolio.totalCurrentCZK} />
             </div>
 
             {/* Upcoming dividends + earnings */}
