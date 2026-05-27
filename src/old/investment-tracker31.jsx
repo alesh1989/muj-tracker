@@ -1763,7 +1763,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
   })).filter(d => d.value !== null);
 
   const CHARTS = [
-    { id:"overview", label:"Přehled" },
+    { id:"overview", label:t.dashboard },
     { id:"revenue", label:"Revenue & Marže" },
     { id:"profit", label:"Ziskovost" },
     { id:"cashflow", label:"Free Cash Flow" },
@@ -2527,7 +2527,7 @@ function AdminPanel({ currentUser, onClose, S }) {
 const T = {
   cs: {
     // Nav tabs
-    dashboard:"Přehled", portfolio:"Portfolio", transakce:"Transakce",
+    dashboard:t.dashboard, portfolio:"Portfolio", transakce:"Transakce",
     cashflow:"Vklady/Výběry", dividendy:"Dividendy", novinky:"Novinky",
     analyza:"Analýza", fi:"FI Kalkulačka", nastaveni:"Nastavení",
     // Dashboard
