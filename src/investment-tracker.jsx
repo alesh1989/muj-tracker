@@ -3313,7 +3313,7 @@ export default function App() {
         }
       } else if (t.type === "dividend" && t.dividendAmount) {
         // dividendAmount is already in CZK (converted at entry time)
-        totalDividendsCZK += t.dividendAmount;
+        totalDividendsCZK += toCZK(t.dividendAmount||0, t.currency||"CZK", rates);
       } else if (t.type === "deposit") {
         // Deposits don't count as investment cost - they're cash inflows
       } else if (t.type === "withdraw") {
@@ -3355,7 +3355,7 @@ export default function App() {
       // Current div yield (annual div / current price) — estimate from last 4 divs
       const lastDivs = tickerDivs.slice(-4);
       const annualDivPerShare = lastDivs.length > 0 && h.totalQty > 0
-        ? lastDivs.reduce((s,t)=>s+(t.dividendAmount||0),0) / h.totalQty * (4 / lastDivs.length) : 0;
+        ? lastDivs.reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0) / h.totalQty * (4 / lastDivs.length) : 0;
       const divYield = currentPrice > 0 && annualDivPerShare > 0 ? (annualDivPerShare / currentPrice) * 100 : 0;
 
       // Break-even price
@@ -4252,7 +4252,7 @@ export default function App() {
                 const yearDiv = activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear);
                 // dividendAmount is stored in CZK after conversion at entry time
                 // Use totalDividendsCZK from portfolio for current year
-                const received = yearDiv.reduce((s,t)=>s+(t.dividendAmount||0),0);
+                const received = yearDiv.reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0);
                 const upcoming = dividends.filter(d=>new Date(d.date).getFullYear()===divCalYear).reduce((s,d)=>s+toCZK(d.amount||0,d.currency,rates),0);
                 const annualEst = received * 4;
                 return [
@@ -4278,7 +4278,7 @@ export default function App() {
                 const d=new Date(t.date);
                 const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
                 if(!byMonthAndTicker[key]) byMonthAndTicker[key]={};
-                byMonthAndTicker[key][t.ticker]=(byMonthAndTicker[key][t.ticker]||0)+(t.dividendAmount||0);
+                byMonthAndTicker[key][t.ticker]=(byMonthAndTicker[key][t.ticker]||0)+toCZK(t.dividendAmount||0,t.currency||"CZK",rates);
               });
               const months=Object.keys(byMonthAndTicker).sort().slice(-24);
               const allTickers=[...new Set(divTx.map(t=>t.ticker))];
@@ -4348,7 +4348,7 @@ export default function App() {
               <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
                 {(lang==="en"?T.en.months:T.cs.months).map((monthName,mi)=>{
                   const now3=new Date();
-                  const received2=activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear&&new Date(t.date).getMonth()===mi).reduce((s,t)=>s+(t.dividendAmount||0),0);
+                  const received2=activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear&&new Date(t.date).getMonth()===mi).reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0);
                   const upcoming2=dividends.filter(d=>new Date(d.date).getMonth()===mi&&new Date(d.date).getFullYear()===divCalYear).reduce((s,d)=>s+toCZK(d.amount||0,d.currency,rates),0);
                   const isCurrentMonth=mi===now3.getMonth()&&divCalYear===now3.getFullYear();
                   const isPast=new Date(divCalYear,mi+1,1)<=now3;
