@@ -1076,7 +1076,7 @@ function CsvImportModal({ onClose, onImport, S }) {
                         <td style={{ padding:"7px 10px", color:"#475569", maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{t.notes||"–"}</td>
                       </tr>
                     );
-                  })})})()
+                  })}
                 </tbody>
               </table>
             </div>
@@ -4863,7 +4863,7 @@ function CsvImportModal({ onClose, onImport, S }) {
                         <td style={{ padding:"7px 10px", color:"#475569", maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{t.notes||"–"}</td>
                       </tr>
                     );
-                  })})})()
+                  })}
                 </tbody>
               </table>
             </div>
