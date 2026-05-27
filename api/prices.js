@@ -1,5 +1,5 @@
-// Vercel Serverless Function — Stock prices
-// Uses Alpha Vantage (reliable, works from Vercel) + Yahoo fallback
+// Vercel Serverless Function — Stock prices via Finnhub
+// Finnhub free: 60 req/min — zvládne 50 tickerů v pohodě
 export const config = { runtime: "nodejs" };
 
 const KNOWN_NAMES = {
@@ -15,70 +15,49 @@ const KNOWN_NAMES = {
   "JPM":"JPMorgan Chase", "BAC":"Bank of America", "WMT":"Walmart",
   "COST":"Costco", "V":"Visa", "MA":"Mastercard", "NFLX":"Netflix",
   "DIS":"Walt Disney", "SBUX":"Starbucks", "SHOP":"Shopify",
+  "ABBV":"AbbVie", "PFE":"Pfizer", "MRK":"Merck", "LLY":"Eli Lilly",
+  "XOM":"ExxonMobil", "CVX":"Chevron", "NEE":"NextEra Energy",
+  "PG":"Procter & Gamble", "UNH":"UnitedHealth", "CRM":"Salesforce",
 };
 
-// Map CZ/EU tickers to Yahoo format
+// Map non-standard tickers to Finnhub format
 const TICKER_MAP = {
-  "CEZ": "CEZ.PR", "MM0": "MM0.PR", "FRA:TBK": "PHIA.AS",
+  "FRA:TBK": "PM",      // Philip Morris International (closest)
+  "CEZ": "CEZ.PR",      // Finnhub uses exchange suffix
+  "MM0": "MM0.PR",
+  "BTC": "BINANCE:BTCUSDT",
+  "ETH": "BINANCE:ETHUSDT",
 };
 
-async function fetchAlphaVantage(symbol, apiKey) {
+async function fetchFinnhub(symbol, apiKey) {
+  const finnSym = TICKER_MAP[symbol] || symbol;
   try {
-    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`;
-    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnSym)}&token=${apiKey}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!r.ok) return null;
-    const data = await r.json();
-    const q = data?.["Global Quote"];
-    if (!q?.["05. price"]) return null;
-    const price = parseFloat(q["05. price"]);
-    const prevClose = parseFloat(q["08. previous close"] || price);
-    const changePct = parseFloat(q["10. change percent"]?.replace("%","") || 0);
+    const d = await r.json();
+    // Finnhub: c=current, o=open, h=high, l=low, pc=prev close, dp=change%
+    if (!d?.c || d.c === 0) return null;
     return {
-      price: parseFloat(price.toFixed(4)),
-      currency: "USD",
-      change1d: parseFloat(changePct.toFixed(2)),
+      price: parseFloat(d.c.toFixed(4)),
+      currency: ["CEZ","MM0"].includes(symbol) ? "CZK" : "USD",
+      change1d: d.dp != null ? parseFloat(d.dp.toFixed(2)) : 0,
       shortName: KNOWN_NAMES[symbol] || symbol,
-      source: "AlphaVantage",
+      source: "Finnhub",
+      lastUpdated: new Date().toISOString(),
     };
   } catch { return null; }
 }
 
-async function fetchYahoo(symbol) {
-  const sym = TICKER_MAP[symbol] || symbol;
-  const variants = [sym];
-  if (symbol.includes(":")) variants.push(symbol.split(":")[1]);
-
-  for (const s of variants) {
-    try {
-      const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(s)}?interval=1d&range=5d`;
-      const r = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept": "application/json",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Referer": "https://finance.yahoo.com",
-          "Origin": "https://finance.yahoo.com",
-        },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!r.ok) continue;
-      const data = await r.json();
-      const meta = data?.chart?.result?.[0]?.meta;
-      if (!meta?.regularMarketPrice) continue;
-      const price = meta.regularMarketPrice;
-      const prev = meta.previousClose || meta.chartPreviousClose || price;
-      return {
-        price: parseFloat(price.toFixed(4)),
-        currency: meta.currency || "USD",
-        change1d: parseFloat(((price - prev) / prev * 100).toFixed(2)),
-        shortName: KNOWN_NAMES[symbol] || meta.shortName || meta.longName || s,
-        source: "Yahoo",
-      };
-    } catch(e) {
-      console.log(`Yahoo ${s} error: ${e.message}`);
-    }
-  }
-  return null;
+async function fetchFinnhubProfile(symbol, apiKey) {
+  // Get company name from Finnhub profile
+  try {
+    const url = `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d?.name || null;
+  } catch { return null; }
 }
 
 export default async function handler(req, res) {
@@ -99,36 +78,76 @@ export default async function handler(req, res) {
     }
   } catch(e) { return res.status(400).json({ error: "Invalid JSON" }); }
 
-  const { tickers } = body;
+  const { tickers, fetchNames } = body;
   if (!tickers?.length) return res.status(200).json({ prices: {}, names: KNOWN_NAMES });
 
   const stockTickers = [...new Set(tickers.filter(t => t && !["VKLAD","VÝBĚR",""].includes(t)))];
+  const finnhubKey = process.env.FINNHUB_KEY;
   const avKey = process.env.ALPHA_VANTAGE_KEY;
+
   const results = {};
+  const fetchedNames = { ...KNOWN_NAMES };
 
-  // Parallel fetch - Yahoo first, Alpha Vantage as fallback
-  await Promise.allSettled(stockTickers.map(async (ticker) => {
-    // 1. Try Yahoo Finance
-    let data = await fetchYahoo(ticker);
+  if (finnhubKey) {
+    // Finnhub: batch fetch all tickers in parallel (60/min limit — fine for 50 tickers)
+    await Promise.allSettled(stockTickers.map(async (ticker) => {
+      const data = await fetchFinnhub(ticker, finnhubKey);
+      const shortName = KNOWN_NAMES[ticker] || data?.shortName || ticker;
+      results[ticker] = data
+        ? { ...data, shortName }
+        : { price: 0, currency: "USD", change1d: 0, shortName, lastUpdated: new Date().toISOString(), source: "fallback" };
 
-    // 2. Try Alpha Vantage if Yahoo failed and key is available
-    if ((!data || data.price === 0) && avKey) {
-      data = await fetchAlphaVantage(ticker, avKey);
-    }
-
-    // 3. Use known name regardless
-    const shortName = KNOWN_NAMES[ticker] || data?.shortName || ticker;
-
-    results[ticker] = data
-      ? { ...data, shortName, lastUpdated: new Date().toISOString() }
-      : { price: 0, currency: "USD", change1d: 0, shortName, lastUpdated: new Date().toISOString(), source: "fallback" };
-  }));
+      // Fetch company name if not in KNOWN_NAMES
+      if (!KNOWN_NAMES[ticker] && finnhubKey) {
+        const name = await fetchFinnhubProfile(ticker, finnhubKey);
+        if (name) {
+          results[ticker].shortName = name;
+          fetchedNames[ticker] = name;
+        }
+      }
+    }));
+  } else if (avKey) {
+    // Fallback: Alpha Vantage (max 25/day on free tier — limit to first 25)
+    const limited = stockTickers.slice(0, 25);
+    await Promise.allSettled(limited.map(async (ticker) => {
+      try {
+        const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(ticker)}&apikey=${avKey}`;
+        const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        if (!r.ok) return;
+        const d = await r.json();
+        const q = d?.["Global Quote"];
+        if (!q?.["05. price"]) return;
+        const price = parseFloat(q["05. price"]);
+        const changePct = parseFloat(q["10. change percent"]?.replace("%","") || 0);
+        results[ticker] = {
+          price: parseFloat(price.toFixed(4)),
+          currency: "USD",
+          change1d: parseFloat(changePct.toFixed(2)),
+          shortName: KNOWN_NAMES[ticker] || ticker,
+          lastUpdated: new Date().toISOString(),
+          source: "AlphaVantage",
+        };
+      } catch {}
+    }));
+    // Fill missing with fallback
+    stockTickers.forEach(ticker => {
+      if (!results[ticker]) {
+        results[ticker] = { price: 0, currency: "USD", change1d: 0, shortName: KNOWN_NAMES[ticker] || ticker, lastUpdated: new Date().toISOString(), source: "fallback" };
+      }
+    });
+  } else {
+    // No API key — return names only
+    stockTickers.forEach(ticker => {
+      results[ticker] = { price: 0, currency: "USD", change1d: 0, shortName: KNOWN_NAMES[ticker] || ticker, lastUpdated: new Date().toISOString(), source: "no-key" };
+    });
+  }
 
   res.setHeader("Cache-Control", "s-maxage=300");
   return res.status(200).json({
     prices: results,
-    names: KNOWN_NAMES,
+    names: fetchedNames,
     fetched: Object.values(results).filter(r => r.price > 0).length,
     requested: stockTickers.length,
+    api: finnhubKey ? "finnhub" : avKey ? "alphavantage" : "none",
   });
 }
