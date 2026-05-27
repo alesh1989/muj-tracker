@@ -174,7 +174,7 @@ const BarChart = ({ data }) => {
 };
 
 // ─── GROWTH CHART (from first transaction → now) ──────────────────────────────
-const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, activeBenchmarks=[], benchmarkOptions=[] }) => {
+const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, activeBenchmarks=[], benchmarkOptions=[], portfolioCurrentCZK=0 }) => {
   const buys = transactions.filter(t => t.type === "buy").sort((a,b) => new Date(a.date)-new Date(b.date));
   if (!buys.length) return <div style={{color:"#475569",fontSize:12}}>Žádné transakce</div>;
 
@@ -210,20 +210,17 @@ const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, a
     }
     cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
   }
-  // The last point has actual current prices — use it as reference
+  // Use actual portfolio value from parent for last point
+  const totalInvestedAll = points.length > 0 ? points[points.length-1].invested : 0;
+  const actualCurrentVal = portfolioCurrentCZK > 0 ? portfolioCurrentCZK : (points[points.length-1]?.current || 0);
+  const ratio = totalInvestedAll > 0 && actualCurrentVal > 0 ? actualCurrentVal / totalInvestedAll : 1;
   if (points.length > 1) {
-    const lastPt = points[points.length - 1];
-    // If last point current value is 0 (no prices), use invested
-    if (lastPt.current === 0) lastPt.current = lastPt.invested;
-    const finalRatio = lastPt.invested > 0 ? lastPt.current / lastPt.invested : 1;
-    // Scale all historical points proportionally
-    // But cap ratio so chart doesn't explode (max 10x)
-    const safeRatio = Math.min(finalRatio, 10);
     points.forEach((pt, i) => {
-      if (i < points.length - 1) {
-        pt.current = pt.invested * safeRatio;
-      }
+      // Scale each point: historical value ∝ amount invested × current ratio
+      pt.current = pt.invested * ratio;
     });
+    // Set last point to exact current value
+    points[points.length-1].current = actualCurrentVal;
   }
 
   if (points.length < 2) return <div style={{color:"#475569",fontSize:12,padding:20}}>Nedostatek dat pro zvolený rok</div>;
@@ -2739,7 +2736,7 @@ const KNOWN_NAMES = {
 
 
 // ─── DRAWDOWN ANALYSIS ───────────────────────────────────────────────────────
-const DrawdownChart = ({ transactions, prices, rates }) => {
+const DrawdownChart = ({ transactions, prices, rates, portfolioCurrentCZK=0 }) => {
   const buys = transactions.filter(t=>t.type==="buy").sort((a,b)=>new Date(a.date)-new Date(b.date));
   if (buys.length < 2) return null;
   // Check if we have any price data
@@ -2772,17 +2769,14 @@ const DrawdownChart = ({ transactions, prices, rates }) => {
     cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
   }
 
-  // Scale historical points based on current portfolio ratio
-  if (points.length > 1) {
-    const lastPt = points[points.length-1];
-    if (lastPt.value === 0) lastPt.value = lastPt.invested;
-    const ratio = lastPt.invested > 0 ? Math.min(lastPt.value / lastPt.invested, 10) : 1;
-    points.forEach((pt,i) => {
-      if (i < points.length-1) {
-        pt.value = pt.invested > 0 ? pt.invested * ratio : 0;
-      }
-    });
-  }
+  // Use actual portfolio value
+  const totalInvDD = points.length > 0 ? points[points.length-1].invested : 0;
+  const actualValDD = portfolioCurrentCZK > 0 ? portfolioCurrentCZK : (points[points.length-1]?.value || 0);
+  const ratioDD = totalInvDD > 0 && actualValDD > 0 ? actualValDD / totalInvDD : 1;
+  points.forEach((pt,i) => {
+    pt.value = pt.invested * ratioDD;
+  });
+  if (points.length > 0) points[points.length-1].value = actualValDD;
   // Calculate drawdown series
   let peak = 0;
   const ddPoints = points.map(p => {
@@ -3700,7 +3694,8 @@ export default function App() {
                 </div>
                 <GrowthChart transactions={activeTransactions} prices={prices} rates={rates}
                   yearFilter={chartYear} benchmarks={benchmarks}
-                  activeBenchmarks={activeBenchmarks} benchmarkOptions={BENCHMARK_OPTIONS} />
+                  activeBenchmarks={activeBenchmarks} benchmarkOptions={BENCHMARK_OPTIONS}
+                  portfolioCurrentCZK={portfolio.totalCurrentCZK} />
               </div>
               <div style={S.card}>
                 <div style={S.sectionTitle}>Alokace</div>
@@ -3802,12 +3797,8 @@ export default function App() {
                     Array.from({length: now.getFullYear()-txYears[0]+1}, (_,i)=>txYears[0]+i) : [];
                   if (!allYears.length) return <div style={{color:textMuted,fontSize:11}}>Žádná data</div>;
                   const totalCost = allBuys.reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
-                  let totalCurrentVal = 0;
-                  const allHoldings = {};
-                  allBuys.forEach(t=>{allHoldings[t.ticker]=(allHoldings[t.ticker]||0)+t.quantity;});
-                  Object.entries(allHoldings).forEach(([tk,qty])=>{
-                    const p=prices[tk]; if(p) totalCurrentVal+=toCZK(qty*p.price,getTickerCurrency(tk,p),rates);
-                  });
+                  // Use actual portfolio value from calculation
+                  const totalCurrentVal = portfolio.totalCurrentCZK > 0 ? portfolio.totalCurrentCZK : totalCost;
                   const overallRatio = totalCost>0 && totalCurrentVal>0 ? totalCurrentVal/totalCost : 1;
                   const getInvestedUntil = (d) => allBuys.filter(t=>new Date(t.date)<=d)
                     .reduce((s,t)=>s+toCZK(t.quantity*t.price+(t.fee||0),t.currency,rates),0);
@@ -3851,7 +3842,7 @@ export default function App() {
             {/* Drawdown Analysis */}
             <div style={S.card}>
               <div style={S.sectionTitle}>{lang==="en"?"Drawdown Analysis":"Drawdown analýza"}</div>
-              <DrawdownChart transactions={activeTransactions} prices={prices} rates={rates} />
+              <DrawdownChart transactions={activeTransactions} prices={prices} rates={rates} portfolioCurrentCZK={portfolio.totalCurrentCZK} />
             </div>
 
             {/* Upcoming dividends + earnings */}
@@ -4208,11 +4199,8 @@ export default function App() {
                 const now2 = new Date();
                 const yearDiv = activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear);
                 // dividendAmount is stored in CZK after conversion at entry time
-                const received = yearDiv.reduce((s,t)=>{
-                  const amt = t.dividendAmount||0;
-                  // If amount is very small (original currency value), convert; otherwise use as CZK
-                  return s + (amt > 0 ? amt : 0);
-                },0);
+                // Use totalDividendsCZK from portfolio for current year
+                const received = yearDiv.reduce((s,t)=>s+(t.dividendAmount||0),0);
                 const upcoming = dividends.filter(d=>new Date(d.date).getFullYear()===divCalYear).reduce((s,d)=>s+toCZK(d.amount||0,d.currency,rates),0);
                 const annualEst = received * 4;
                 return [
