@@ -22,12 +22,17 @@ const KNOWN_NAMES = {
 
 // Map non-standard tickers to Finnhub format
 const TICKER_MAP = {
-  "FRA:TBK": "PM",      // Philip Morris International (closest)
-  "CEZ": "CEZ.PR",      // Finnhub uses exchange suffix
-  "MM0": "MM0.PR",
+  "FRA:TBK": "TABAK.PR",   // Philip Morris CR on Prague exchange
+  "CEZ": "CEZ.PR",          // CEZ on Prague exchange
+  "MM0": "MONET.PR",        // Moneta Money Bank on Prague exchange
   "BTC": "BINANCE:BTCUSDT",
   "ETH": "BINANCE:ETHUSDT",
+  "BTC-USD": "BINANCE:BTCUSDT",
+  "ETH-USD": "BINANCE:ETHUSDT",
 };
+
+// Czech stocks that need CZK currency
+const CZK_TICKERS = ["CEZ","MM0","FRA:TBK","MONET.PR","CEZ.PR","TABAK.PR"];
 
 async function fetchFinnhub(symbol, apiKey) {
   const finnSym = TICKER_MAP[symbol] || symbol;
@@ -40,7 +45,7 @@ async function fetchFinnhub(symbol, apiKey) {
     if (!d?.c || d.c === 0) return null;
     return {
       price: parseFloat(d.c.toFixed(4)),
-      currency: ["CEZ","MM0"].includes(symbol) ? "CZK" : "USD",
+      currency: CZK_TICKERS.includes(symbol) || CZK_TICKERS.includes(TICKER_MAP[symbol]||"") ? "CZK" : "USD",
       change1d: d.dp != null ? parseFloat(d.dp.toFixed(2)) : 0,
       shortName: KNOWN_NAMES[symbol] || symbol,
       source: "Finnhub",

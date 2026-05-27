@@ -2620,24 +2620,6 @@ const T = {
   }
 };
 
-// ─── KNOWN TICKER NAMES ──────────────────────────────────────────────────────
-const KNOWN_NAMES = {
-  "CEZ":"ČEZ, a.s.", "MM0":"Moneta Money Bank", "FRA:TBK":"Philip Morris ČR",
-  "INTC":"Intel Corporation", "TSLA":"Tesla, Inc.", "AAPL":"Apple Inc.",
-  "MSFT":"Microsoft Corp.", "NVDA":"NVIDIA Corporation", "GOOGL":"Alphabet Inc.",
-  "AMZN":"Amazon.com Inc.", "META":"Meta Platforms", "KO":"Coca-Cola Co.",
-  "JNJ":"Johnson & Johnson", "O":"Realty Income Corp.", "SPY":"SPDR S&P 500 ETF",
-  "QQQ":"Invesco QQQ Trust", "VTI":"Vanguard Total Stock", "VWCE":"Vanguard FTSE All-World",
-  "UMC":"United Microelectronics", "RCL":"Royal Caribbean", "IRM":"Iron Mountain",
-  "DAL":"Delta Air Lines", "AHT":"Ashford Hospitality Trust",
-  "BTC":"Bitcoin", "ETH":"Ethereum", "BTC-USD":"Bitcoin", "ETH-USD":"Ethereum",
-  "JPM":"JPMorgan Chase", "BAC":"Bank of America", "WMT":"Walmart",
-  "COST":"Costco", "V":"Visa", "MA":"Mastercard", "NFLX":"Netflix",
-  "DIS":"Walt Disney", "SBUX":"Starbucks", "SHOP":"Shopify",
-  "SOFI":"SoFi Technologies", "PLTR":"Palantir", "AMD":"AMD",
-  "BABA":"Alibaba", "NKE":"Nike", "PYPL":"PayPal",
-};
-
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   // ─── AUTH STATE ────────────────────────────────────────────────────────
@@ -2932,32 +2914,39 @@ export default function App() {
         return updated;
       });
     }
-    // Clean up .PR/.DE duplicate variants that were auto-added
-    setPrices(prev => {
-      const cleaned = { ...prev };
-      Object.keys(cleaned).forEach(k => {
-        // Remove .PR/.DE variants if the base ticker exists
-        const base = k.replace(/\.(PR|DE|PL|F|AS|L)$/i, "");
-        if (base !== k && cleaned[base] !== undefined) {
-          delete cleaned[k];
-        }
-      });
-      return cleaned;
-    });
-    // Initial fetch prices
+    // Initial fetch prices (shortNames will be cached from response)
     fetchPrices(portfolioTickers);
-    // Lookup names for tickers without names
+    // Also lookup names for tickers that don't have them yet
     const missingNames = portfolioTickers.filter(t => !tickerNames[t]);
-    missingNames.forEach((t, i) => setTimeout(() => lookupTickerName(t), i * 100));
+    missingNames.forEach(t => setTimeout(() => lookupTickerName(t), 200));
     // Refresh every 15 min
     const interval = setInterval(() => fetchPrices(portfolioTickers), 15 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loaded, activePortfolioId]);
 
   // ─── TICKER NAME LOOKUP ─────────────────────────────────────────────────
-  const [tickerNames, setTickerNames] = useState(KNOWN_NAMES); // pre-loaded with known names
+  const [tickerNames, setTickerNames] = useState({}); // cache: AAPL -> "Apple Inc."
 
+  const KNOWN_NAMES = {
+    "CEZ":"ČEZ, a.s.", "MM0":"Moneta Money Bank", "FRA:TBK":"Philip Morris ČR",
+    "INTC":"Intel Corporation", "TSLA":"Tesla, Inc.", "AAPL":"Apple Inc.",
+    "MSFT":"Microsoft Corp.", "NVDA":"NVIDIA Corporation", "GOOGL":"Alphabet Inc.",
+    "AMZN":"Amazon.com Inc.", "META":"Meta Platforms", "KO":"Coca-Cola Co.",
+    "JNJ":"Johnson & Johnson", "O":"Realty Income Corp.", "SPY":"SPDR S&P 500 ETF",
+    "QQQ":"Invesco QQQ Trust", "VTI":"Vanguard Total Stock", "VWCE":"Vanguard FTSE All-World",
+    "UMC":"United Microelectronics", "RCL":"Royal Caribbean", "IRM":"Iron Mountain",
+    "DAL":"Delta Air Lines", "AHT":"Ashford Hospitality Trust",
+    "BTC":"Bitcoin", "ETH":"Ethereum", "BTC-USD":"Bitcoin", "ETH-USD":"Ethereum",
+    "JPM":"JPMorgan Chase", "BAC":"Bank of America", "WMT":"Walmart",
+    "COST":"Costco", "HD":"Home Depot", "V":"Visa", "MA":"Mastercard",
+    "NFLX":"Netflix", "DIS":"Walt Disney", "SBUX":"Starbucks",
+    "SPY":"SPDR S&P 500 ETF", "BRK.B":"Berkshire Hathaway",
+  };
 
+  // Apply known names immediately on mount
+  useEffect(() => {
+    setTickerNames(prev => ({ ...KNOWN_NAMES, ...prev }));
+  }, []);
 
   const lookupTickerName = useCallback(async (ticker) => {
     const tk = ticker.toUpperCase().trim();
