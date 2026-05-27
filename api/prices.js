@@ -98,9 +98,13 @@ export default async function handler(req, res) {
     await Promise.allSettled(stockTickers.map(async (ticker) => {
       const data = await fetchFinnhub(ticker, finnhubKey);
       const shortName = KNOWN_NAMES[ticker] || data?.shortName || ticker;
-      results[ticker] = data
-        ? { ...data, shortName }
-        : { price: 0, currency: "USD", change1d: 0, shortName, lastUpdated: new Date().toISOString(), source: "fallback" };
+      const isCzkTicker = ["CEZ","MM0","FRA:TBK"].includes(ticker);
+    if (data) {
+      if (isCzkTicker) data.currency = "CZK";
+      results[ticker] = { ...data, shortName, lastUpdated: new Date().toISOString() };
+    } else {
+      results[ticker] = { price: 0, currency: isCzkTicker ? "CZK" : "USD", change1d: 0, shortName, lastUpdated: new Date().toISOString(), source: "fallback" };
+    }
 
       // Fetch company name if not in KNOWN_NAMES
       if (!KNOWN_NAMES[ticker] && finnhubKey) {

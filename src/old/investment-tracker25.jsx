@@ -71,18 +71,10 @@ const fmtPct = (n) => (isNaN(n) || n === null ? "–" : `${n >= 0 ? "+" : ""}${n
 const fmtDate = (d) => new Date(d).toLocaleDateString("cs-CZ");
 const daysSince = (dateStr) => Math.floor((Date.now() - new Date(dateStr)) / 86400000);
 const toCZK = (amount, currency, rates) => {
-  if (!amount || isNaN(amount)) return 0;
-  if (currency === "CZK") return amount; // already CZK — no conversion!
+  if (currency === "CZK") return amount;
   if (currency === "USD") return amount * (rates.USD_CZK || 23.2);
   if (currency === "EUR") return amount * (rates.EUR_CZK || 25.4);
-  return amount; // unknown currency — return as-is
-};
-
-// Czech tickers that trade in CZK (Finnhub may return wrong currency)
-const CZK_TICKERS_SET = new Set(["CEZ","CEZ.PR","MM0","MM0.PR","MONET.PR","FRA:TBK","TABAK.PR","KOFOL.PR","VIG.PR"]);
-const getTickerCurrency = (ticker, priceObj) => {
-  if (CZK_TICKERS_SET.has(ticker)) return "CZK";
-  return priceObj?.currency || "USD";
+  return amount;
 };
 const upColor = (n) => (n >= 0 ? "#22d3a0" : "#f87171");
 
@@ -3055,7 +3047,7 @@ export default function App() {
     const positions = Object.values(holdings).map(h => {
       const p = prices[h.ticker];
       const currentPrice = p?.price || 0;
-      const currentCurrency = getTickerCurrency(h.ticker, p);
+      const currentCurrency = p?.currency || "USD";
       const currentValueCZK = toCZK(h.totalQty * currentPrice, currentCurrency, rates);
       const gainCZK = currentValueCZK - h.totalCostCZK;
       const gainPct = h.totalCostCZK > 0 ? (gainCZK / h.totalCostCZK) * 100 : 0;
@@ -3064,7 +3056,7 @@ export default function App() {
       const testedLots = h.lots.filter(l => new Date(l.date) <= threeYearsAgo);
       const testedQty = testedLots.reduce((s, l) => s + l.quantity, 0);
       const testedCostCZK = testedLots.reduce((s, l) => s + l.costCZK, 0);
-      const testedValueCZK = toCZK(testedQty * currentPrice, currentCurrency, rates); // currentCurrency already CZK-aware
+      const testedValueCZK = toCZK(testedQty * currentPrice, currentCurrency, rates);
       const earliestLot = h.lots.length > 0 ? h.lots.reduce((a, b) => a.date < b.date ? a : b) : null;
       const daysHeld = earliestLot ? daysSince(earliestLot.date) : 0;
       const daysToTest = earliestLot ? Math.max(0, 1095 - daysSince(earliestLot.date)) : 0;
@@ -3615,7 +3607,7 @@ export default function App() {
                         {k:"name",l:"Ticker"},{k:"value",l:"Hodnota"},{k:"weight",l:"Váha %"},
                         {k:"gain",l:"Zisk/Ztráta"},{k:"gainpct",l:"Zisk %"},{k:"annret",l:"Roční výnos"},
                         {k:"yoc",l:"YoC"},{k:"divyield",l:"Div. výnos"},{k:"change1d",l:"Denní %"},
-                        {k:"days",l:"Dnů"},{"k":"3l",l:"3L test"},{k:"price1",l:"Cena/ks"}
+                        {k:"days",l:"Dnů"},{"k":"3l",l:"3L test"}
                       ].map(h=>(
                         <th key={h.k} style={{...S.th,cursor:h.k!=="3l"?"pointer":"default",color:sortKey===h.k?"#6366f1":"#475569",userSelect:"none"}}
                           onClick={()=>{if(h.k==="3l")return;if(sortKey===h.k)setSortDir(d=>d==="asc"?"desc":"asc");else{setSortKey(h.k);setSortDir("desc");}}}>
@@ -3658,11 +3650,6 @@ export default function App() {
                             {p.daysToTest>0
                               ?<span style={{color:"#f59e0b",fontSize:10}}>{p.daysToTest}d</span>
                               :<span style={{color:"#10b981",fontSize:10}}>✓</span>}
-                          </td>
-                          <td style={{...S.td,color:textSec,fontSize:11}}>
-                            {p.currentPrice > 0
-                              ? `${p.currentPrice.toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:2})} ${p.currentCurrency}`
-                              : "–"}
                           </td>
                         </tr>
                       ))}
@@ -3708,7 +3695,7 @@ export default function App() {
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                         <div>
                           <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>{p.ticker}</div>
-                          <div style={{fontSize:10,color:"#475569"}}>{(tickerNames[p.ticker]||KNOWN_NAMES[p.ticker]||p.name||"")?.slice(0,22)}</div>
+                          <div style={{fontSize:10,color:"#475569"}}>{p.name?.slice(0,20)}</div>
                         </div>
                         <span style={S.badge(catColor[p.category]||"#64748b")}>{catLabel[p.category]}</span>
                       </div>
