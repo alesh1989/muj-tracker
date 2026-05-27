@@ -2905,7 +2905,7 @@ export default function App() {
         Object.entries(data.prices).forEach(([tk, info]) => {
           if (info.shortName) newNames[tk] = info.shortName;
         });
-        if (Object.keys(newNames).length) setTickerNames(prev => ({...prev,...newNames,...KNOWN_NAMES})); // KNOWN_NAMES always wins
+        if (Object.keys(newNames).length) setTickerNames(prev => ({...newNames,...prev}));
         setPricesStatus("ok");
       } else {
         setPricesStatus("error");
@@ -2976,14 +2976,14 @@ export default function App() {
       const data = await res.json();
       const info = data.prices?.[tk];
       if (info?.shortName && info.shortName !== tk) {
-        if (!KNOWN_NAMES[tk]) setTickerNames(prev => ({ ...prev, [tk]: info.shortName }));
+        setTickerNames(prev => ({ ...prev, [tk]: info.shortName }));
         return;
       }
       // 3. Fallback: chart API
       const res2 = await fetch(`/api/chart?ticker=${encodeURIComponent(tk)}&range=1d`);
       const data2 = await res2.json();
       if (data2?.shortName && data2.shortName !== tk) {
-        if (!KNOWN_NAMES[tk]) setTickerNames(prev => ({ ...prev, [tk]: data2.shortName }));
+        setTickerNames(prev => ({ ...prev, [tk]: data2.shortName }));
       }
     } catch {}
   }, [tickerNames]);
@@ -3423,44 +3423,6 @@ export default function App() {
             </div>
 
             {/* CHARTS */}
-            {/* Live price ticker strip */}
-            <div style={{ display:"flex", gap:8, overflowX:"auto", marginBottom:12, padding:"2px 0" }}>
-              {portfolio.positions.slice().sort((a,b)=>b.currentValueCZK-a.currentValueCZK).map(p=>(
-                <div key={p.ticker} style={{ flexShrink:0, background:bgCard, borderRadius:10,
-                  padding:"6px 12px", border:`1px solid ${border}`,
-                  display:"flex", gap:8, alignItems:"center" }}>
-                  <span style={{ fontSize:11, fontWeight:700, color:textPrimary }}>{p.ticker}</span>
-                  <span style={{ fontSize:11, color:textSec }}>
-                    {p.currentPrice.toLocaleString("cs-CZ", {minimumFractionDigits:2, maximumFractionDigits:2})} {p.currentCurrency}
-                  </span>
-                  <span style={{ fontSize:10, fontWeight:600, color:upColor(p.change1d) }}>
-                    {p.change1d >= 0 ? "+" : ""}{p.change1d.toFixed(2)}%
-                  </span>
-                </div>
-              ))}
-            </div>
-            {/* Live price ticker strip */}
-            <div style={{ display:"flex", gap:8, overflowX:"auto", marginBottom:12, padding:"4px 0",
-              scrollbarWidth:"none", msOverflowStyle:"none" }}>
-              {portfolio.positions.slice().sort((a,b)=>b.currentValueCZK-a.currentValueCZK).map(p=>(
-                <div key={p.ticker} style={{ flexShrink:0, background:bgCard, borderRadius:10,
-                  padding:"6px 14px", border:`1px solid ${border}`,
-                  display:"flex", gap:10, alignItems:"center" }}>
-                  <span style={{ fontSize:11, fontWeight:800, color:textPrimary }}>{p.ticker}</span>
-                  <span style={{ fontSize:11, color:textSec }}>
-                    {p.currentPrice > 0
-                      ? p.currentPrice.toLocaleString("cs-CZ", {minimumFractionDigits:2, maximumFractionDigits:2}) + " " + p.currentCurrency
-                      : "–"}
-                  </span>
-                  {p.change1d !== 0 && (
-                    <span style={{ fontSize:10, fontWeight:700, color:upColor(p.change1d),
-                      background: upColor(p.change1d) + "22", padding:"2px 6px", borderRadius:6 }}>
-                      {p.change1d >= 0 ? "+" : ""}{p.change1d.toFixed(2)}%
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
             <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"2fr 1fr", gap:14, marginBottom:14 }}>
               <div style={S.card}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
