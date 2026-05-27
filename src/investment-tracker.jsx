@@ -603,11 +603,28 @@ const ValuationAnalyzer = ({ rates }) => {
   return (
     <div>
       {/* Header + method select */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-        <div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div style={{flex:1,minWidth:120}}>
           <div style={S2.label}>Ticker / Název</div>
-          <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} style={{ ...S2.input, width: 100 }} placeholder="AAPL" />
+          <input value={tickerInput} onChange={e => setTickerInput(e.target.value.toUpperCase())}
+            onKeyDown={e=>{ if(e.key==="Enter"){ setTicker(tickerInput); fetchLivePrice(tickerInput); }}}
+            style={{ ...S2.input, width:"100%", textTransform:"uppercase" }} placeholder="AAPL, NVDA..."/>
         </div>
+        <button onClick={()=>{ setTicker(tickerInput); fetchLivePrice(tickerInput); }}
+          style={{background:"linear-gradient(135deg,#4f46e5,#6366f1)",color:"#fff",border:"none",
+            borderRadius:6,padding:"8px 16px",cursor:"pointer",fontSize:12,fontFamily:"inherit",
+            fontWeight:700,whiteSpace:"nowrap",marginBottom:1}}>
+          {fetchingPrice?"⟳ Načítám...":"↻ Načíst cenu"}
+        </button>
+        {livePrice && (
+          <div style={{padding:"6px 12px",background:"#10b98122",border:"1px solid #10b98144",
+            borderRadius:8,fontSize:11,fontWeight:700,color:"#10b981",whiteSpace:"nowrap"}}>
+            {ticker}: {livePrice.toFixed(2)} {currency}
+          </div>
+        )}
+      </div>
+      {priceError && <div style={{fontSize:11,color:"#f87171",marginBottom:8,padding:"6px 10px",background:"#f8717111",borderRadius:6}}>⚠ {priceError}</div>}
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
         <div>
           <div style={S2.label}>Měna</div>
           <select value={currency} onChange={e => setCurrency(e.target.value)} style={{ ...S2.select, width: 80 }}>
@@ -1912,6 +1929,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
                         ["EPS (TTM)", `${data.eps?.slice(-1)[0]?.toFixed(2)} ${data.currency}`, upC(data.eps?.slice(-1)[0]||0)],
                         ["P/E ratio", data.peRatio?.slice(-1)[0]?.toFixed(1)||"N/A", "#94a3b8"],
                         ["EBITDA (TTM)", `${data.ebitda?.slice(-1)[0]?.toFixed(1)}B`, "#94a3b8"],
+                        ["Aktuální cena", data.currentPrice ? `${data.currentPrice} ${data.currency}` : "–", "#22d3a0"],
                         ["Dividenda/akcie", `${data.dividendPerShare?.slice(-1)[0]?.toFixed(2)||"0"} ${data.currency}`, "#8b5cf6"],
                         ["Čistá marže", `${data.netMargin?.slice(-1)[0]?.toFixed(1)||"N/A"}%`, "#10b981"],
                         ["ROE", `${data.roe?.slice(-1)[0]?.toFixed(1)||"N/A"}%`, upC(data.roe?.slice(-1)[0]||0)],
@@ -4007,7 +4025,7 @@ export default function App() {
                   </tr></thead>
                   <tbody>
                     {filtered.sort((a,b)=>{
-                      const v = {value:"currentValueCZK",gain:"gainCZK",gainpct:"gainPct",annret:"annualReturn",yoc:"yoc",change1d:"change1d",weight:"weight",days:"daysToTest",divyield:"divYield"}[sortKey]||"currentValueCZK";
+                      const v = {value:"currentValueCZK",gain:"gainCZK",gainpct:"gainPct",annret:"annualizedReturn",yoc:"yoc",change1d:"change1d",weight:"weight",days:"daysToTest",divyield:"divYield"}[sortKey]||"currentValueCZK";
                       return sortDir==="asc"?(a[v]||0)-(b[v]||0):(b[v]||0)-(a[v]||0);
                     }).map(p=>{
                       const typeColor = {buy:"#10b981",sell:"#ef4444",dividend:"#8b5cf6",deposit:"#22d3a0",withdraw:"#f59e0b"};
@@ -4031,7 +4049,7 @@ export default function App() {
                           </td>
                           <td style={{...S.td,color:isPos?"#22d3a0":"#f87171",fontWeight:600}}>{fmt(p.gainCZK,"CZK",0)}</td>
                           <td style={{...S.td,color:isPos?"#22d3a0":"#f87171",fontWeight:700}}>{fmtPct(p.gainPct)}</td>
-                          <td style={{...S.td,color:p.annualReturn>=0?"#22d3a0":"#f87171",fontWeight:600}}>{p.annualReturn!=null?fmtPct(p.annualReturn):"–"}</td>
+                          <td style={{...S.td,color:(p.annualizedReturn||0)>=0?"#22d3a0":"#f87171",fontWeight:600}}>{p.annualizedReturn!=null&&p.annualizedReturn!==0?fmtPct(p.annualizedReturn):"–"}</td>
                           <td style={{...S.td,color:"#8b5cf6"}}>{p.yoc!=null?p.yoc.toFixed(2)+"%":"–"}</td>
                           <td style={{...S.td,color:"#8b5cf6"}}>{p.divYield!=null?p.divYield.toFixed(2)+"%":"–"}</td>
                           <td style={{...S.td,color:upColor(p.change1d),fontWeight:600}}>{p.change1d!=null?(p.change1d>=0?"+":"")+p.change1d.toFixed(2)+"%":"–"}</td>
@@ -4123,7 +4141,14 @@ export default function App() {
                   {[...activeTransactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>{
                     const typeColor = {buy:"#10b981",sell:"#ef4444",dividend:"#8b5cf6",deposit:"#22d3a0",withdraw:"#f59e0b"}[t.type]||"#94a3b8";
                     const typeLabel = {buy:lang==="en"?"Buy":"Nákup",sell:lang==="en"?"Sell":"Prodej",dividend:lang==="en"?"Dividend":"Dividenda",deposit:lang==="en"?"Deposit":"Vklad",withdraw:lang==="en"?"Withdrawal":"Výběr"}[t.type]||t.type;
-                    const totalCZK = t.type==="dividend" ? t.dividendAmount
+                    // dividendAmount: if stored in original currency (old tx), convert; if already CZK, use direct
+                    const getDivCZK = (t) => {
+                      const amt = t.dividendAmount||0;
+                      if(!amt) return 0;
+                      // Always convert using live rates — toCZK returns amt as-is for CZK
+                      return toCZK(amt, t.currency||"CZK", rates);
+                    };
+                    const totalCZK = t.type==="dividend" ? getDivCZK(t)
                       : (t.type==="deposit"||t.type==="withdraw") ? toCZK(t.amount||0,t.currency,rates)
                       : toCZK((t.quantity||0)*(t.price||0)+(t.fee||0),t.currency,rates);
                     return (
