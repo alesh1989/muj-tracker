@@ -210,19 +210,20 @@ const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, a
     }
     cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
   }
-  // Scale historical points proportionally based on current portfolio value
+  // The last point has actual current prices — use it as reference
   if (points.length > 1) {
-    const lastPt = points[points.length-1];
-    const totalInvested = lastPt.invested;
-    const currentVal = lastPt.current > 0 ? lastPt.current : totalInvested;
-    const ratio = totalInvested > 0 ? currentVal / totalInvested : 1;
+    const lastPt = points[points.length - 1];
+    // If last point current value is 0 (no prices), use invested
+    if (lastPt.current === 0) lastPt.current = lastPt.invested;
+    const finalRatio = lastPt.invested > 0 ? lastPt.current / lastPt.invested : 1;
+    // Scale all historical points proportionally
+    // But cap ratio so chart doesn't explode (max 10x)
+    const safeRatio = Math.min(finalRatio, 10);
     points.forEach((pt, i) => {
       if (i < points.length - 1) {
-        pt.current = pt.invested * ratio;
+        pt.current = pt.invested * safeRatio;
       }
     });
-    // If last point has no price data, use invested as current
-    if (lastPt.current === 0) lastPt.current = lastPt.invested;
   }
 
   if (points.length < 2) return <div style={{color:"#475569",fontSize:12,padding:20}}>Nedostatek dat pro zvolený rok</div>;
@@ -444,12 +445,12 @@ const ValuationAnalyzer = ({ rates }) => {
   const [priceError, setPriceError] = useState("");
 
   // DCF inputs
-  const [dcf, setDcf] = useState({ currentPrice: 213.5, fcf: 100, shares: 15400, growthRate1: 12, growthRate2: 6, terminalRate: 3, discountRate: 10, years1: 5, years2: 5, cash: 162, debt: 108 });
+  const [dcf, setDcf] = useState({ currentPrice: 0, fcf: 100, shares: 15400, growthRate1: 12, growthRate2: 6, terminalRate: 3, discountRate: 10, years1: 5, years2: 5, cash: 162, debt: 108 });
   // Graham/Buffett
-  const [graham, setGraham] = useState({ eps: 6.42, growthRate: 10, aaa_yield: 4.5, currentPrice: 213.5 });
-  const [buffett, setBuffett] = useState({ bookValue: 4.0, roe: 35, requiredReturn: 15, years: 10, terminalPE: 15, currentPrice: 213.5, eps: 6.42 });
+  const [graham, setGraham] = useState({ eps: 6.42, growthRate: 10, aaa_yield: 4.5, currentPrice: 0 });
+  const [buffett, setBuffett] = useState({ bookValue: 4.0, roe: 35, requiredReturn: 15, years: 10, terminalPE: 15, currentPrice: 0, eps: 6.42 });
   // Technical
-  const [tech, setTech] = useState({ prices52wHigh: 237.2, prices52wLow: 164.1, currentPrice: 213.5, ma50: 201.3, ma200: 195.8, rsi: 58, volume: 65, avgVolume: 58, pe: 33.2, sectorPE: 28 });
+  const [tech, setTech] = useState({ prices52wHigh: 237.2, prices52wLow: 164.1, currentPrice: 0, ma50: 201.3, ma200: 195.8, rsi: 58, volume: 65, avgVolume: 58, pe: 33.2, sectorPE: 28 });
 
   // Fetch live price when ticker changes
   const fetchLivePrice = async (tk) => {
@@ -2771,14 +2772,15 @@ const DrawdownChart = ({ transactions, prices, rates }) => {
     cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
   }
 
-  // Scale historical points proportionally (same as GrowthChart)
+  // Scale historical points based on current portfolio ratio
   if (points.length > 1) {
     const lastPt = points[points.length-1];
-    const currVal = lastPt.value;
-    const totalInv = lastPt.invested;
-    const ratio = totalInv > 0 ? currVal / totalInv : 1;
+    if (lastPt.value === 0) lastPt.value = lastPt.invested;
+    const ratio = lastPt.invested > 0 ? Math.min(lastPt.value / lastPt.invested, 10) : 1;
     points.forEach((pt,i) => {
-      if (i < points.length-1) pt.value = pt.invested * ratio;
+      if (i < points.length-1) {
+        pt.value = pt.invested > 0 ? pt.invested * ratio : 0;
+      }
     });
   }
   // Calculate drawdown series
@@ -3340,7 +3342,9 @@ export default function App() {
     const totalAnnualDiv = positions.reduce((s, p) => s + toCZK(p.annualDivPerShare * p.totalQty, p.currentCurrency, rates), 0);
     const portfolioYield = totalCurrentCZK > 0 ? (totalAnnualDiv / totalCurrentCZK) * 100 : 0;
     const portfolioYoC = totalInvestedCZK > 0 ? (positions.reduce((s,p)=>s+p.totalDivReceivedCZK,0) / totalInvestedCZK) * 100 : 0;
-    return { positions, totalInvestedCZK, totalCurrentCZK, totalGainCZK, totalGainPct, totalDividendsCZK, testedTotal, totalDayChange, totalAnnualDiv, portfolioYield, portfolioYoC };
+    const totalDeposits = activeTransactions.filter(t=>t.type==="deposit").reduce((s,t)=>s+toCZK(t.amount||0,t.currency,rates),0);
+    const totalWithdrawals = activeTransactions.filter(t=>t.type==="withdraw").reduce((s,t)=>s+toCZK(t.amount||0,t.currency,rates),0);
+    return { positions, totalInvestedCZK, totalCurrentCZK, totalGainCZK, totalGainPct, totalDividendsCZK, testedTotal, totalDayChange, totalAnnualDiv, portfolioYield, portfolioYoC, totalDeposits, totalWithdrawals };
   }, [transactions, prices, rates]);
 
   // ─── FI CALCULATIONS ────────────────────────────────────────────────────
@@ -3387,7 +3391,7 @@ export default function App() {
   }, [activeTransactions]);
 
   // ─── ADD TX STATE ───────────────────────────────────────────────────────
-  const [newTx, setNewTx] = useState({ type:"buy", ticker:"", name:"", category:"stock", date:new Date().toISOString().slice(0,10), quantity:"", price:"", currency:"CZK", fee:"", dividendAmount:"", amount:"", notes:"" });
+  const [newTx, setNewTx] = useState({ type:"buy", ticker:"", name:"", category:"stock", date:new Date().toISOString().slice(0,10), quantity:"", price:"", currency:"CZK", fee:"", dividendAmount:"", dividendPerShare:"", divTax:"15", amount:"", notes:"" });
 
   const addTransaction = () => {
     const isFlow = newTx.type === "deposit" || newTx.type === "withdraw";
@@ -4203,7 +4207,12 @@ export default function App() {
               {(() => {
                 const now2 = new Date();
                 const yearDiv = activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear);
-                const received = yearDiv.reduce((s,t)=>s+(t.dividendAmount||0),0);
+                // dividendAmount is stored in CZK after conversion at entry time
+                const received = yearDiv.reduce((s,t)=>{
+                  const amt = t.dividendAmount||0;
+                  // If amount is very small (original currency value), convert; otherwise use as CZK
+                  return s + (amt > 0 ? amt : 0);
+                },0);
                 const upcoming = dividends.filter(d=>new Date(d.date).getFullYear()===divCalYear).reduce((s,d)=>s+toCZK(d.amount||0,d.currency,rates),0);
                 const annualEst = received * 4;
                 return [
