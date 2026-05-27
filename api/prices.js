@@ -1,15 +1,88 @@
-// Vercel Serverless Function — Multi-source stock price fetcher
+// Vercel Serverless Function — Stock prices via multiple sources
 export const config = { runtime: "nodejs" };
 
-// Normalize ticker for different exchanges
-function normalizeTicker(ticker) {
-  // FRA:TBK -> TBK.F (Frankfurt), CEZ -> CEZ.PR (Prague), MM0 -> MM0.DE
-  const map = {
-    "FRA:TBK": "PM", // Philip Morris International (approximation)
-    "CEZ": "CEZ.PR",
-    "MM0": "MNETA.PR",
+const KNOWN_NAMES = {
+  "AAPL":"Apple Inc.", "MSFT":"Microsoft Corp.", "NVDA":"NVIDIA Corp.",
+  "GOOGL":"Alphabet Inc.", "AMZN":"Amazon.com", "META":"Meta Platforms",
+  "TSLA":"Tesla, Inc.", "INTC":"Intel Corp.", "UMC":"United Microelectronics",
+  "KO":"Coca-Cola Co.", "JNJ":"Johnson & Johnson", "O":"Realty Income",
+  "SPY":"SPDR S&P 500 ETF", "QQQ":"Invesco QQQ", "VWCE":"Vanguard All-World",
+  "VTI":"Vanguard Total Stock", "CEZ":"ČEZ, a.s.", "MM0":"Moneta Money Bank",
+  "FRA:TBK":"Philip Morris ČR", "RCL":"Royal Caribbean", "IRM":"Iron Mountain",
+  "DAL":"Delta Air Lines", "AHT":"Ashford Hospitality", "BTC":"Bitcoin",
+  "ETH":"Ethereum", "BTC-USD":"Bitcoin", "ETH-USD":"Ethereum",
+  "JPM":"JPMorgan Chase", "BAC":"Bank of America", "WMT":"Walmart",
+  "COST":"Costco", "HD":"Home Depot", "V":"Visa", "MA":"Mastercard",
+  "NFLX":"Netflix", "DIS":"Walt Disney", "SBUX":"Starbucks",
+};
+
+async function fetchYahooChart(symbol) {
+  const variants = [symbol];
+  if (symbol.includes(":")) variants.push(symbol.split(":")[1]);
+  // Czech stocks
+  if (symbol === "CEZ") variants.push("CEZ.PR");
+  if (symbol === "MM0") variants.push("MM0.PR");
+
+  for (const sym of variants) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d`;
+      const r = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+          "Accept": "application/json",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Cache-Control": "no-cache",
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!r.ok) continue;
+      const data = await r.json();
+      const meta = data?.chart?.result?.[0]?.meta;
+      if (!meta?.regularMarketPrice) continue;
+      const price = meta.regularMarketPrice;
+      const prev = meta.previousClose || meta.chartPreviousClose || price;
+      return {
+        price: parseFloat(price.toFixed(4)),
+        currency: meta.currency || "USD",
+        change1d: parseFloat(((price - prev) / prev * 100).toFixed(2)),
+        shortName: meta.shortName || meta.longName || KNOWN_NAMES[symbol] || symbol,
+        source: "Yahoo",
+      };
+    } catch {}
+  }
+  return null;
+}
+
+async function fetchStooq(symbol) {
+  // Stooq symbol mapping
+  const symMap = {
+    "CEZ": "cez.pl", "MM0": "mm0.pl", "FRA:TBK": "tbk.f",
   };
-  return map[ticker] || ticker;
+  const stooqSym = symMap[symbol] || (symbol.toLowerCase() + ".us");
+  try {
+    const url = `https://stooq.com/q/l/?s=${stooqSym}&f=sd2t2ohlcv&h&e=csv`;
+    const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!r.ok) return null;
+    const text = await r.text();
+    const lines = text.trim().split("\n");
+    if (lines.length < 2) return null;
+    const parts = lines[1].split(",");
+    // Symbol,Date,Time,Open,High,Low,Close,Volume
+    if (parts.length < 7) return null;
+    const close = parseFloat(parts[6]);
+    const open = parseFloat(parts[3]);
+    if (isNaN(close) || close <= 0) return null;
+    return {
+      price: close,
+      currency: ["CEZ","MM0"].includes(symbol) ? "CZK" : "EUR",
+      change1d: open > 0 ? parseFloat(((close - open) / open * 100).toFixed(2)) : 0,
+      shortName: KNOWN_NAMES[symbol] || symbol,
+      source: "Stooq",
+    };
+  } catch { return null; }
 }
 
 export default async function handler(req, res) {
@@ -31,119 +104,38 @@ export default async function handler(req, res) {
   } catch(e) { return res.status(400).json({ error: "Invalid JSON" }); }
 
   const { tickers } = body;
-  if (!tickers?.length) return res.status(200).json({ prices: {} });
+  if (!tickers?.length) return res.status(200).json({ prices: {}, names: KNOWN_NAMES });
 
-  const stockTickers = [...new Set(tickers.filter(t =>
-    t && !["VKLAD","VÝBĚR",""].includes(t)
-  ))];
-
+  const stockTickers = [...new Set(tickers.filter(t => t && !["VKLAD","VÝBĚR",""].includes(t)))];
   const results = {};
 
-  // ── Method 1: Yahoo Finance via chart endpoint (more reliable) ───────────
+  // Fetch all in parallel
   await Promise.allSettled(stockTickers.map(async (ticker) => {
-    const variants = [ticker]; // try original first
-    if (ticker.includes(":")) variants.push(ticker.split(":")[1]); // FRA:TBK -> TBK
-
-    for (const sym of variants) {
-      try {
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
-        const r = await fetch(url, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-          },
-          signal: AbortSignal.timeout(8000),
-        });
-        if (!r.ok) continue;
-        const data = await r.json();
-        const meta = data?.chart?.result?.[0]?.meta;
-        if (!meta?.regularMarketPrice) continue;
-
-        const price = meta.regularMarketPrice;
-        const prev = meta.previousClose || meta.chartPreviousClose || price;
-        results[ticker] = {
-          price: parseFloat(price.toFixed(4)),
-          currency: meta.currency || "USD",
-          change1d: parseFloat(((price - prev) / prev * 100).toFixed(2)),
-          shortName: meta.shortName || meta.longName || sym,
-          lastUpdated: new Date().toISOString(),
-          source: "Yahoo",
-        };
-        break; // found it, stop trying variants
-      } catch {}
+    // Try Yahoo first
+    let data = await fetchYahooChart(ticker);
+    // Fallback to Stooq for European stocks
+    if (!data || data.price === 0) {
+      data = await fetchStooq(ticker);
+    }
+    if (data) {
+      // Always use known name if available (more accurate than Yahoo shortName)
+      if (KNOWN_NAMES[ticker]) data.shortName = KNOWN_NAMES[ticker];
+      results[ticker] = { ...data, lastUpdated: new Date().toISOString() };
+    } else {
+      // Return name only, price 0
+      results[ticker] = {
+        price: 0, currency: "USD", change1d: 0,
+        shortName: KNOWN_NAMES[ticker] || ticker,
+        lastUpdated: new Date().toISOString(), source: "fallback"
+      };
     }
   }));
 
-  // ── Method 2: Stooq for missing (good for European stocks) ───────────────
-  const missing = stockTickers.filter(t => !results[t]);
-  if (missing.length > 0) {
-    await Promise.allSettled(missing.map(async (ticker) => {
-      try {
-        // Stooq uses different format: CEZ.PL, MM0.DE etc
-        const stooqMap = {
-          "CEZ": "cez.pl", "MM0": "mm0.de", "FRA:TBK": "tbk.f",
-        };
-        const sym = stooqMap[ticker] || ticker.toLowerCase().replace(":", ".") + ".us";
-        const url = `https://stooq.com/q/d/l/?s=${sym}&i=d`;
-        const r = await fetch(url, {
-          headers: { "User-Agent": "Mozilla/5.0" },
-          signal: AbortSignal.timeout(6000),
-        });
-        if (!r.ok) return;
-        const text = await r.text();
-        const lines = text.trim().split("\n");
-        const lastLine = lines[lines.length - 1];
-        const parts = lastLine.split(",");
-        // Format: Date,Open,High,Low,Close,Volume
-        if (parts.length >= 5 && !isNaN(parseFloat(parts[4]))) {
-          const close = parseFloat(parts[4]);
-          const open = parseFloat(parts[1]);
-          results[ticker] = {
-            price: close,
-            currency: ticker === "CEZ" || ticker === "MM0" ? "CZK" : "EUR",
-            change1d: open > 0 ? parseFloat(((close - open) / open * 100).toFixed(2)) : 0,
-            shortName: ticker,
-            lastUpdated: new Date().toISOString(),
-            source: "Stooq",
-          };
-        }
-      } catch {}
-    }));
-  }
-
-  // ── Method 3: Fallback hardcoded names for known CZ stocks ───────────────
-  const knownNames = {
-    "CEZ": "ČEZ, a.s.", "MM0": "Moneta Money Bank",
-    "FRA:TBK": "Philip Morris ČR", "RCL": "Royal Caribbean",
-    "IRM": "Iron Mountain", "AHT": "Ashford Hospitality",
-    "UMC": "United Microelectronics", "INTC": "Intel Corporation",
-    "TSLA": "Tesla, Inc.", "AAPL": "Apple Inc.", "MSFT": "Microsoft Corp.",
-    "NVDA": "NVIDIA Corporation", "GOOGL": "Alphabet Inc.",
-    "AMZN": "Amazon.com Inc.", "META": "Meta Platforms",
-    "BRK.B": "Berkshire Hathaway", "JPM": "JPMorgan Chase",
-    "KO": "Coca-Cola Co.", "JNJ": "Johnson & Johnson",
-    "O": "Realty Income Corp.", "SPY": "SPDR S&P 500 ETF",
-    "QQQ": "Invesco QQQ Trust", "VTI": "Vanguard Total Stock",
-    "VWCE": "Vanguard FTSE All-World", "BTC-USD": "Bitcoin",
-    "ETH-USD": "Ethereum",
-  };
-
-  // Add known names to results that have prices but no names
-  stockTickers.forEach(t => {
-    if (results[t] && !results[t].shortName && knownNames[t]) {
-      results[t].shortName = knownNames[t];
-    }
-    // For tickers with no price at all, at least return the name
-    if (!results[t] && knownNames[t]) {
-      results[t] = { price: 0, currency: "USD", change1d: 0, shortName: knownNames[t], lastUpdated: new Date().toISOString(), source: "fallback" };
-    }
-  });
-
+  res.setHeader("Cache-Control", "s-maxage=300");
   return res.status(200).json({
     prices: results,
-    fetched: Object.keys(results).filter(t => results[t].price > 0).length,
+    names: KNOWN_NAMES,
+    fetched: Object.values(results).filter(r => r.price > 0).length,
     requested: stockTickers.length,
-    missing: stockTickers.filter(t => !results[t] || results[t].price === 0),
   });
 }

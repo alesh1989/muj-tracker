@@ -2882,12 +2882,12 @@ export default function App() {
           });
           return updated;
         });
-        // Cache shortNames from API + apply server-side KNOWN_NAMES
-        const newNames = { ...(data.names || {}) };
+        // Cache shortNames from Yahoo Finance
+        const newNames = {};
         Object.entries(data.prices).forEach(([tk, info]) => {
           if (info.shortName) newNames[tk] = info.shortName;
         });
-        if (Object.keys(newNames).length) setTickerNames(prev => ({...newNames,...prev}));
+        if (Object.keys(newNames).length) setTickerNames(prev => ({...prev,...newNames}));
         setPricesStatus("ok");
       } else {
         setPricesStatus("error");
@@ -2937,16 +2937,7 @@ export default function App() {
     "UMC":"United Microelectronics", "RCL":"Royal Caribbean", "IRM":"Iron Mountain",
     "DAL":"Delta Air Lines", "AHT":"Ashford Hospitality Trust",
     "BTC":"Bitcoin", "ETH":"Ethereum", "BTC-USD":"Bitcoin", "ETH-USD":"Ethereum",
-    "JPM":"JPMorgan Chase", "BAC":"Bank of America", "WMT":"Walmart",
-    "COST":"Costco", "HD":"Home Depot", "V":"Visa", "MA":"Mastercard",
-    "NFLX":"Netflix", "DIS":"Walt Disney", "SBUX":"Starbucks",
-    "SPY":"SPDR S&P 500 ETF", "BRK.B":"Berkshire Hathaway",
   };
-
-  // Apply known names immediately on mount
-  useEffect(() => {
-    setTickerNames(prev => ({ ...KNOWN_NAMES, ...prev }));
-  }, []);
 
   const lookupTickerName = useCallback(async (ticker) => {
     const tk = ticker.toUpperCase().trim();
