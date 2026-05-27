@@ -2749,13 +2749,17 @@ const DrawdownChart = ({ transactions, prices, rates }) => {
   while (cursor <= now) {
     const txSoFar = buys.filter(t=>new Date(t.date)<=cursor);
     const holdings = {};
-    txSoFar.forEach(t=>{ holdings[t.ticker]=(holdings[t.ticker]||0)+t.quantity; });
+    let invested = 0;
+    txSoFar.forEach(t=>{
+      holdings[t.ticker]=(holdings[t.ticker]||0)+t.quantity;
+      invested += toCZK(t.quantity*t.price+(t.fee||0), t.currency, rates);
+    });
     let current = 0;
     Object.entries(holdings).forEach(([ticker,qty])=>{
       const p = prices[ticker];
       if(p) current += toCZK(qty*p.price, getTickerCurrency(ticker,p), rates);
     });
-    points.push({ date:new Date(cursor), value:current, invested, label:`${cursor.getMonth()+1}/${String(cursor.getFullYear()).slice(2)}` });
+    points.push({ date:new Date(cursor), value:current||invested, invested, label:`${cursor.getMonth()+1}/${String(cursor.getFullYear()).slice(2)}` });
     cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
   }
 
