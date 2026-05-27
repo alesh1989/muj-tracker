@@ -1310,265 +1310,6 @@ const MiniChart = ({ data, type="bar", color="#6c63ff", label="", unit="", heigh
   );
 }
 
-
-// ─── CANDLESTICK CHART COMPONENT ─────────────────────────────────────────────
-function CandlestickChart({ ticker: initialTicker, S }) {
-  const [ticker, setTicker] = useState(initialTicker || "AAPL");
-  const [inputTicker, setInputTicker] = useState(initialTicker || "AAPL");
-  const [range, setRange] = useState("1y");
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [tooltip, setTooltip] = useState(null);
-
-  const RANGES = [
-    { id:"1d", label:"1D" },
-    { id:"1mo", label:"1M" },
-    { id:"ytd", label:"YTD" },
-    { id:"1y", label:"1R" },
-    { id:"10y", label:"10R" },
-    { id:"max", label:"Max" },
-  ];
-
-  const fetchChart = async (t, r) => {
-    setLoading(true); setError(""); setTooltip(null);
-    try {
-      const res = await fetch(`/api/chart?ticker=${encodeURIComponent(t)}&range=${r}`);
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const d = await res.json();
-      if (d.error) throw new Error(d.error);
-      setData(d);
-      setTicker(t.toUpperCase());
-    } catch(e) {
-      setError("Nepodařilo se načíst data: " + e.message);
-    }
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    if (initialTicker) {
-      setInputTicker(initialTicker);
-      fetchChart(initialTicker, range);
-    }
-  }, [initialTicker]);
-
-  const darkBg = "#0f1628";
-  const gridC = "#1e2d45";
-  const upC = "#22d3a0";
-  const dnC = "#f87171";
-  const textC = "#c8d8f0";
-  const mutedC = "#5a7399";
-
-  // Chart dimensions
-  const W = 580, H = 260, VOL_H = 50;
-  const PAD = { t: 20, b: 30, l: 62, r: 10, volGap: 8 };
-  const iW = W - PAD.l - PAD.r;
-  const iH = H - PAD.t - PAD.b;
-  const totalH = H + VOL_H + PAD.volGap;
-
-  const candles = data?.candles || [];
-
-  // Compute scales
-  const visibleCandles = candles;
-  const minL = visibleCandles.length ? Math.min(...visibleCandles.map(c => c.l)) : 0;
-  const maxH = visibleCandles.length ? Math.max(...visibleCandles.map(c => c.h)) : 1;
-  const priceRange = maxH - minL || 1;
-  const maxVol = Math.max(...visibleCandles.map(c => c.v), 1);
-
-  const xS = (i) => PAD.l + (i + 0.5) / visibleCandles.length * iW;
-  const yS = (v) => PAD.t + iH - ((v - minL) / priceRange) * iH;
-  const yVol = (v) => H + PAD.volGap + VOL_H - (v / maxVol) * VOL_H;
-
-  const candleW = Math.max(1, Math.min(12, iW / visibleCandles.length - 1));
-
-  // Format date based on range
-  const fmtT = (ts) => {
-    const d = new Date(ts);
-    if (range === "1d") return d.toLocaleTimeString("cs-CZ", { hour:"2-digit", minute:"2-digit" });
-    if (range === "1mo" || range === "ytd") return d.toLocaleDateString("cs-CZ", { day:"2-digit", month:"2-digit" });
-    return d.toLocaleDateString("cs-CZ", { month:"2-digit", year:"2-digit" });
-  };
-
-  const fmtPrice = (v) => v != null ? v.toFixed(2) : "–";
-
-  // Tick marks on X axis (show ~6)
-  const xTicks = visibleCandles.length > 0
-    ? visibleCandles.filter((_, i) => i % Math.max(1, Math.floor(visibleCandles.length / 6)) === 0)
-    : [];
-
-  // Y ticks
-  const yTicks = [0, 0.2, 0.4, 0.6, 0.8, 1].map(t => minL + priceRange * (1 - t));
-
-  // Price change
-  const firstClose = candles[0]?.c;
-  const lastClose = candles[candles.length - 1]?.c;
-  const priceChange = firstClose && lastClose ? lastClose - firstClose : 0;
-  const pctChange = firstClose ? (priceChange / firstClose * 100) : 0;
-
-  return (
-    <div>
-      {/* Header */}
-      <div style={{ display:"flex", gap:10, marginBottom:14, flexWrap:"wrap", alignItems:"flex-end" }}>
-        <div style={{ flex:1, minWidth:140 }}>
-          <div style={{ fontSize:10, color:mutedC, marginBottom:5 }}>Ticker</div>
-          <div style={{ display:"flex", gap:6 }}>
-            <input value={inputTicker} onChange={e=>setInputTicker(e.target.value.toUpperCase())}
-              onKeyDown={e=>e.key==="Enter"&&fetchChart(inputTicker,range)}
-              placeholder="AAPL" style={{...S.input, width:120, textTransform:"uppercase"}}/>
-            <button style={{...S.btn("primary"),padding:"8px 14px"}}
-              onClick={()=>fetchChart(inputTicker,range)}>
-              {loading?"⟳":"📈"}
-            </button>
-          </div>
-        </div>
-        {/* Range buttons */}
-        <div style={{ display:"flex", gap:4 }}>
-          {RANGES.map(r=>(
-            <button key={r.id}
-              style={{...S.btn(range===r.id?"primary":"outline"),padding:"6px 12px",fontSize:11,fontWeight:700}}
-              onClick={()=>{ setRange(r.id); fetchChart(ticker,r.id); }}>
-              {r.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {error && <div style={{color:"#f87171",fontSize:12,padding:"8px 12px",background:"#f8717111",borderRadius:6,marginBottom:10}}>{error}</div>}
-
-      {/* Stock info bar */}
-      {data && (
-        <div style={{ display:"flex", gap:16, marginBottom:10, alignItems:"baseline", flexWrap:"wrap" }}>
-          <div style={{ fontSize:16, fontWeight:800, color:textC }}>{ticker}</div>
-          <div style={{ fontSize:13, color:mutedC }}>{data.shortName}</div>
-          {lastClose && (
-            <>
-              <div style={{ fontSize:18, fontWeight:700, color:textC }}>{fmtPrice(lastClose)} {data.currency}</div>
-              <div style={{ fontSize:13, fontWeight:600, color:priceChange>=0?upC:dnC }}>
-                {priceChange>=0?"+":""}{fmtPrice(priceChange)} ({pctChange>=0?"+":""}{pctChange.toFixed(2)}%)
-              </div>
-            </>
-          )}
-          {tooltip && (
-            <div style={{ fontSize:11, color:mutedC, marginLeft:"auto" }}>
-              {fmtT(tooltip.t)} · O:{fmtPrice(tooltip.o)} H:{fmtPrice(tooltip.h)} L:{fmtPrice(tooltip.l)} C:{fmtPrice(tooltip.c)}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Chart */}
-      {loading && (
-        <div style={{ background:darkBg, borderRadius:12, height:300, display:"flex", alignItems:"center", justifyContent:"center" }}>
-          <div style={{ color:"#6c63ff", fontSize:13 }}>⟳ Načítám historická data...</div>
-        </div>
-      )}
-
-      {!loading && candles.length > 0 && (
-        <div style={{ background:darkBg, borderRadius:12, padding:"12px 4px 4px", overflowX:"auto" }}
-          onMouseLeave={()=>setTooltip(null)}>
-          <svg viewBox={`0 0 ${W} ${totalH}`} style={{ width:"100%", minWidth:320, height:"auto" }}>
-            {/* Grid lines */}
-            {yTicks.map((v, i) => (
-              <g key={i}>
-                <line x1={PAD.l} y1={yS(v)} x2={W-PAD.r} y2={yS(v)} stroke={gridC} strokeWidth="1"/>
-                <text x={PAD.l-6} y={yS(v)+4} textAnchor="end" fill={mutedC} fontSize="8.5" fontWeight="600">
-                  {v.toFixed(v > 1000 ? 0 : 2)}
-                </text>
-              </g>
-            ))}
-
-            {/* X axis ticks */}
-            {xTicks.map((c, i) => {
-              const idx = candles.indexOf(c);
-              return (
-                <text key={i} x={xS(idx)} y={H+PAD.volGap+VOL_H+14} textAnchor="middle" fill={mutedC} fontSize="8">
-                  {fmtT(c.t)}
-                </text>
-              );
-            })}
-
-            {/* Volume bars */}
-            {visibleCandles.map((c, i) => (
-              <rect key={`v${i}`}
-                x={xS(i) - candleW/2} y={yVol(c.v)}
-                width={candleW} height={H + PAD.volGap + VOL_H - yVol(c.v)}
-                fill={c.c >= c.o ? upC : dnC} opacity={0.4}/>
-            ))}
-
-            {/* Candlesticks */}
-            {visibleCandles.map((c, i) => {
-              const isUp = c.c >= c.o;
-              const color = isUp ? upC : dnC;
-              const bodyTop = yS(Math.max(c.o, c.c));
-              const bodyBot = yS(Math.min(c.o, c.c));
-              const bodyH = Math.max(1, bodyBot - bodyTop);
-              const isHovered = tooltip?.t === c.t;
-
-              return (
-                <g key={i} style={{cursor:"crosshair"}}
-                  onMouseEnter={()=>setTooltip(c)}
-                  onTouchStart={e=>{e.preventDefault();setTooltip(c);}}>
-                  {/* Wide invisible touch zone */}
-                  <rect x={xS(i)-Math.max(8,candleW/2+4)} y={PAD.t} width={Math.max(16,candleW+8)} height={iH} fill="transparent"/>
-                  {/* High-low wick */}
-                  <line x1={xS(i)} y1={yS(c.h)} x2={xS(i)} y2={yS(c.l)}
-                    stroke={isHovered?"#ffffff":color} strokeWidth={isHovered?1.5:1}/>
-                  {/* Body */}
-                  <rect x={xS(i)-candleW/2} y={bodyTop} width={candleW} height={bodyH}
-                    fill={isUp?"transparent":color}
-                    stroke={color} strokeWidth={isHovered?1.5:1}
-                    opacity={isHovered?1:0.9}/>
-                  {isUp && <rect x={xS(i)-candleW/2} y={bodyTop} width={candleW} height={bodyH}
-                    fill={color} opacity={isHovered?0.9:0.7}/>}
-                </g>
-              );
-            })}
-
-            {/* Crosshair vertical line when hovered */}
-            {tooltip && (() => {
-              const idx = candles.findIndex(c => c.t === tooltip.t);
-              if (idx < 0) return null;
-              return <line x1={xS(idx)} y1={PAD.t} x2={xS(idx)} y2={H+PAD.volGap+VOL_H}
-                stroke="#ffffff" strokeWidth="0.5" strokeDasharray="3,3" opacity="0.4"/>;
-            })()}
-
-            {/* Current price line */}
-            {data?.currentPrice && (
-              <g>
-                <line x1={PAD.l} y1={yS(data.currentPrice)} x2={W-PAD.r} y2={yS(data.currentPrice)}
-                  stroke="#6c63ff" strokeWidth="1" strokeDasharray="4,3" opacity="0.8"/>
-                <rect x={W-PAD.r} y={yS(data.currentPrice)-8} width={PAD.r+2} height={16} fill="#6c63ff" rx="2"/>
-                <text x={W-PAD.r+1} y={yS(data.currentPrice)+4} fill="#fff" fontSize="7.5" fontWeight="700">
-                  {data.currentPrice.toFixed(2)}
-                </text>
-              </g>
-            )}
-
-            {/* Volume label */}
-            <text x={PAD.l-6} y={H+PAD.volGap+8} textAnchor="end" fill={mutedC} fontSize="7">VOL</text>
-
-            {/* Axes */}
-            <line x1={PAD.l} y1={PAD.t} x2={PAD.l} y2={H} stroke={gridC} strokeWidth="1"/>
-            <line x1={PAD.l} y1={H} x2={W-PAD.r} y2={H} stroke={gridC} strokeWidth="1"/>
-          </svg>
-          <div style={{ display:"flex", gap:16, padding:"4px 8px", fontSize:10, color:mutedC }}>
-            <span><span style={{color:upC}}>█</span> Růst</span>
-            <span><span style={{color:dnC}}>█</span> Pokles</span>
-            <span>Svíčky · {range.toUpperCase()} · {candles.length} period</span>
-          </div>
-        </div>
-      )}
-
-      {!loading && candles.length === 0 && !error && (
-        <div style={{ background:darkBg, borderRadius:12, height:200, display:"flex", alignItems:"center",
-          justifyContent:"center", color:mutedC, fontSize:12 }}>
-          Zadej ticker a klikni na 📈
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── FUNDAMENTAL CHARTS COMPONENT ────────────────────────────────────────────
 const FundamentalCharts = ({ S }) => {
   const [ticker, setTicker] = useState("AAPL");
@@ -1734,12 +1475,6 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
 
       {data && !loading && (
         <>
-          {/* Mini price chart inline */}
-          <div style={{marginBottom:16}}>
-            <div style={{fontSize:10,color:"#5a7399",marginBottom:8,letterSpacing:"0.08em",textTransform:"uppercase"}}>Cenový vývoj</div>
-            <CandlestickChart ticker={data.ticker} S={S} />
-          </div>
-
           {/* Header */}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:10}}>
             <div>
@@ -2062,9 +1797,8 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}.
 
 // ─── ANALYZA TAB WRAPPER ──────────────────────────────────────────────────────
 function AnalyzaTab({ rates, S, t=T.cs, lang="cs" }) {
-  const [subTab, setSubTab] = useState("graf");
+  const [subTab, setSubTab] = useState("fundamenty");
   const SUB = [
-    { id:"graf", label:"📈 Cenový graf" },
     { id:"fundamenty", label:t.fundamentalCharts },
     { id:"oceneni", label:t.valuation },
   ];
@@ -2078,7 +1812,6 @@ function AnalyzaTab({ rates, S, t=T.cs, lang="cs" }) {
             onClick={()=>setSubTab(s.id)}>{s.label}</button>
         ))}
       </div>
-      {subTab==="graf" && <CandlestickChart S={S} />}
       {subTab==="fundamenty" && <FundamentalCharts S={S} />}
       {subTab==="oceneni" && <ValuationAnalyzer rates={rates} />}
     </>
@@ -2654,7 +2387,6 @@ export default function App() {
   const [showAddTx, setShowAddTx] = useState(false);
   const [showCsvImport, setShowCsvImport] = useState(false);
   const [showDeleteAll, setShowDeleteAll] = useState(false);
-  const [editTx, setEditTx] = useState(null); // transaction being edited
   const [filterCat, setFilterCat] = useState("all");
   const [sortKey, setSortKey] = useState("value"); // value|name|gain|gainpct|yoc|annret|weight|change1d
   const [sortDir, setSortDir] = useState("desc"); // asc|desc
@@ -2884,40 +2616,12 @@ export default function App() {
       activeTransactions.filter(t => t.type === "buy").map(t => t.ticker)
     )].filter(t => t && !["VKLAD","VÝBĚR"].includes(t));
     if (portfolioTickers.length === 0) return;
-    // Auto-add missing tickers to prices
-    const newTickers = portfolioTickers.filter(t => !prices[t]);
-    if (newTickers.length > 0) {
-      setPrices(prev => {
-        const updated = { ...prev };
-        newTickers.forEach(t => { updated[t] = { price: 0, currency: "USD", change1d: 0 }; });
-        return updated;
-      });
-    }
     // Initial fetch
     fetchPrices(portfolioTickers);
     // Refresh every 15 min
     const interval = setInterval(() => fetchPrices(portfolioTickers), 15 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loaded, activePortfolioId]);
-
-  // ─── TICKER NAME LOOKUP ─────────────────────────────────────────────────
-  const [tickerNames, setTickerNames] = useState({}); // cache: AAPL -> "Apple Inc."
-
-  const lookupTickerName = useCallback(async (ticker) => {
-    if (!ticker || ticker.length < 1 || tickerNames[ticker]) return;
-    try {
-      const res = await fetch("/api/prices", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tickers: [ticker] }),
-      });
-      const data = await res.json();
-      const info = data.prices?.[ticker.toUpperCase()];
-      if (info?.shortName || info?.name) {
-        setTickerNames(prev => ({ ...prev, [ticker.toUpperCase()]: info.shortName || info.name }));
-      }
-    } catch {}
-  }, [tickerNames]);
 
   // ─── AUTO FETCH RATES ───────────────────────────────────────────────────
   const fetchRates = useCallback(async () => {
@@ -3669,8 +3373,8 @@ export default function App() {
                     const totalCZK = t.type==="dividend" ? toCZK(t.dividendAmount||0, t.currency, rates)
                       : (t.type==="deposit"||t.type==="withdraw") ? toCZK(t.amount||0, t.currency, rates)
                       : toCZK((t.quantity||0)*(t.price||0)+(t.fee||0), t.currency, rates);
-                    const typeColor = {buy:"#10b981",sell:"#ef4444",dividend:"#8b5cf6",deposit:"#22d3a0",withdraw:"#f59e0b"}[t.type]||"#94a3b8";
-                    const typeLabel = {buy:lang==="en"?"Buy":"Nákup",sell:lang==="en"?"Sell":"Prodej",dividend:lang==="en"?"Dividend":"Dividenda",deposit:lang==="en"?"Deposit":"Vklad",withdraw:lang==="en"?"Withdrawal":"Výběr"}[t.type]||t.type;
+                    const typeColor = {buy:"#10b981",sell:"#ef4444",dividend:"#8b5cf6"}[t.type]||"#94a3b8";
+                    const typeLabel = {buy:"Nákup",sell:"Prodej",dividend:"Dividenda"}[t.type]||t.type;
                     return (
                       <tr key={t.id}>
                         <td style={S.td}>{fmtDate(t.date)}</td>
@@ -3682,12 +3386,7 @@ export default function App() {
                         <td style={S.td}>{t.fee?`${t.fee} ${t.currency}`:"–"}</td>
                         <td style={{ ...S.td, fontWeight:600 }}>{fmt(totalCZK,"CZK",0)}</td>
                         <td style={{ ...S.td, color:"#64748b" }}>{t.notes||"–"}</td>
-                        <td style={S.td}>
-                          <div style={{display:"flex",gap:4}}>
-                            <button style={{...S.btn("outline"),padding:"3px 8px",fontSize:11,title:"Upravit"}} onClick={()=>setEditTx({...t})}>✏</button>
-                            <button style={{...S.btn("danger"),padding:"3px 8px"}} onClick={()=>{ if(window.confirm("Smazat transakci?")) setTransactions(prev=>prev.filter(x=>x.id!==t.id)); }}>✕</button>
-                          </div>
-                        </td>
+                        <td style={S.td}><button style={{ ...S.btn("danger"), padding:"3px 8px" }} onClick={() => setTransactions(prev=>prev.filter(x=>x.id!==t.id))}>✕</button></td>
                       </tr>
                     );
                   })}
@@ -3754,12 +3453,7 @@ export default function App() {
                               <td style={{...S.td,fontWeight:600}}>{fmt(toCZK(t.amount||0,t.currency,rates),"CZK",0)}</td>
                               <td style={S.td}>{t.fee?fmt(t.fee,t.currency,2):"–"}</td>
                               <td style={{...S.td,color:"#64748b"}}>{t.notes||"–"}</td>
-                              <td style={S.td}>
-                        <div style={{display:"flex",gap:4}}>
-                          <button style={{...S.btn("outline"),padding:"3px 8px",fontSize:11}} onClick={()=>setEditTx({...t})}>✏</button>
-                          <button style={{...S.btn("danger"),padding:"3px 8px"}} onClick={()=>setTransactions(prev=>prev.filter(x=>x.id!==t.id))}>✕</button>
-                        </div>
-                      </td>
+                              <td style={S.td}><button style={{...S.btn("danger"),padding:"3px 8px"}} onClick={()=>setTransactions(prev=>prev.filter(x=>x.id!==t.id))}>✕</button></td>
                             </tr>
                           ))}
                         </tbody>
@@ -4395,73 +4089,6 @@ export default function App() {
       )}
 
       {/* ─── MODAL ADD TX ─────────────────────────────────────────────────── */}
-      {/* ─── EDIT TRANSACTION MODAL ─────────────────────────────────────── */}
-      {editTx && (
-        <div style={S.modal} onClick={e=>e.target===e.currentTarget&&setEditTx(null)}>
-          <div style={S.modalBox}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-              <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>✏ Upravit transakci</div>
-              <button style={{...S.btn("outline"),padding:"4px 10px"}} onClick={()=>setEditTx(null)}>✕</button>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              {[
-                {label:"Typ",key:"type",type:"select",opts:[["buy","Nákup"],["sell","Prodej"],["dividend","Dividenda"],["deposit","Vklad"],["withdraw","Výběr"]]},
-                {label:"Kategorie",key:"category",type:"select",opts:[["stock","Akcie"],["etf","ETF"],["crypto","Crypto"],["cash","Hotovost"]]},
-                ...(editTx.type!=="deposit"&&editTx.type!=="withdraw"?[
-                  {label:"Ticker",key:"ticker",type:"text",placeholder:"AAPL"},
-                  {label:`Název ${tickerNames[newTx.ticker?.toUpperCase()]?"(auto: "+tickerNames[newTx.ticker?.toUpperCase()]+")":""}`,key:"name",type:"text",placeholder:tickerNames[newTx.ticker?.toUpperCase()]||"Apple Inc."},
-                ]:[]),
-                {label:"Datum",key:"date",type:"date"},
-                {label:"Měna",key:"currency",type:"select",opts:[["USD","USD"],["EUR","EUR"],["CZK","CZK"]]},
-                ...(editTx.type==="deposit"||editTx.type==="withdraw"?[
-                  {label:"Částka",key:"amount",type:"number",placeholder:"10000"},
-                  {label:"Poplatek",key:"fee",type:"number",placeholder:"0"},
-                ]:editTx.type==="dividend"?[
-                  {label:"Částka dividendy",key:"dividendAmount",type:"number",placeholder:"25.00"},
-                ]:[
-                  {label:"Množství",key:"quantity",type:"number",placeholder:"10"},
-                  {label:"Cena/ks",key:"price",type:"number",placeholder:"150.00"},
-                  {label:"Poplatek",key:"fee",type:"number",placeholder:"1.5"},
-                ]),
-                {label:"Poznámka",key:"notes",type:"text",placeholder:"Volitelné",span:true},
-              ].map(f=>(
-                <div key={f.key} style={f.span?{gridColumn:"1/-1"}:{}}>
-                  <div style={{fontSize:11,color:"#475569",marginBottom:5}}>{f.label}</div>
-                  {f.type==="select"
-                    ?<select value={editTx[f.key]||""} onChange={e=>setEditTx(p=>({...p,[f.key]:e.target.value}))} style={S.select}>
-                       {f.opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}
-                     </select>
-                    :<input type={f.type} placeholder={f.placeholder} value={editTx[f.key]||""}
-                       onChange={e=>setEditTx(p=>({...p,[f.key]:e.target.value}))} style={S.input}/>}
-                </div>
-              ))}
-            </div>
-            {/* Preview of changes */}
-            <div style={{marginTop:14,padding:"10px 14px",background:bgCard,borderRadius:8,border:`1px solid ${border}`,fontSize:11,color:textMuted}}>
-              <b style={{color:textPrimary}}>Náhled:</b> {editTx.date} · {editTx.ticker||"–"} · {editTx.quantity||editTx.amount||""} {editTx.currency} @ {editTx.price||"–"}
-            </div>
-            <div style={{display:"flex",gap:8,marginTop:14}}>
-              <button style={{...S.btn("primary"),flex:1,padding:"11px"}} onClick={()=>{
-                setTransactions(prev=>prev.map(t=>t.id===editTx.id?{
-                  ...editTx,
-                  quantity:parseFloat(editTx.quantity)||0,
-                  price:parseFloat(editTx.price)||0,
-                  fee:parseFloat(editTx.fee)||0,
-                  dividendAmount:parseFloat(editTx.dividendAmount)||0,
-                  amount:parseFloat(editTx.amount)||0,
-                  ticker:editTx.ticker?.toUpperCase()||editTx.ticker,
-                }:t));
-                setEditTx(null);
-              }}>✓ Uložit změny</button>
-              <button style={{...S.btn("danger"),padding:"11px 16px",border:`1px solid ${border}`}} onClick={()=>{
-                if(window.confirm("Smazat tuto transakci?")){ setTransactions(prev=>prev.filter(t=>t.id!==editTx.id)); setEditTx(null); }
-              }}>🗑 Smazat</button>
-              <button style={{...S.btn("outline"),padding:"11px 16px"}} onClick={()=>setEditTx(null)}>Zrušit</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {showAddTx && (
         <div style={S.modal} onClick={e=>e.target===e.currentTarget&&setShowAddTx(false)}>
           <div style={S.modalBox}>
@@ -4475,7 +4102,7 @@ export default function App() {
                 {label:"Kategorie",key:"category",type:"select",opts:[["stock","Akcie"],["etf","ETF"],["crypto","Crypto"],["cash","Hotovost"]]},
                 ...(newTx.type!=="deposit"&&newTx.type!=="withdraw"?[
                   {label:"Ticker",key:"ticker",type:"text",placeholder:"AAPL"},
-                  {label:`Název ${tickerNames[newTx.ticker?.toUpperCase()]?"(auto: "+tickerNames[newTx.ticker?.toUpperCase()]+")":""}`,key:"name",type:"text",placeholder:tickerNames[newTx.ticker?.toUpperCase()]||"Apple Inc."},
+                  {label:"Název",key:"name",type:"text",placeholder:"Apple Inc."},
                 ]:[]),
                 {label:"Datum",key:"date",type:"date"},
                 {label:"Měna",key:"currency",type:"select",opts:[["USD","USD"],["EUR","EUR"],["CZK","CZK"]]},
