@@ -4640,8 +4640,7 @@ export default function App() {
               const reader=new FileReader();
               reader.onload=ev=>{
                 const text=ev.target.result;
-                const lines2=text.trim().split("
-");
+                const lines2=text.trim().split("\n");
                 const headers=lines2[0].split(",").map(h=>h.trim().toLowerCase().replace(/"/g,""));
                 const imported=[];
                 lines2.slice(1).forEach(line=>{
