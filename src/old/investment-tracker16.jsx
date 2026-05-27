@@ -1361,7 +1361,7 @@ function CandlestickChart({ ticker: initialTicker, S }) {
 
   // Chart dimensions
   const W = 580, H = 260, VOL_H = 50;
-  const PAD = { t: 20, b: 36, l: 62, r: 10, volGap: 8 };
+  const PAD = { t: 20, b: 30, l: 62, r: 10, volGap: 8 };
   const iW = W - PAD.l - PAD.r;
   const iH = H - PAD.t - PAD.b;
   const totalH = H + VOL_H + PAD.volGap;
@@ -1385,29 +1385,15 @@ function CandlestickChart({ ticker: initialTicker, S }) {
   const fmtT = (ts) => {
     const d = new Date(ts);
     if (range === "1d") return d.toLocaleTimeString("cs-CZ", { hour:"2-digit", minute:"2-digit" });
-    if (range === "1mo") return d.toLocaleDateString("cs-CZ", { day:"2-digit", month:"short" });
-    if (range === "ytd" || range === "1y") return d.toLocaleDateString("cs-CZ", { month:"short", year:"2-digit" });
-    if (range === "10y") return d.toLocaleDateString("cs-CZ", { month:"short", year:"numeric" });
-    if (range === "max") return d.toLocaleDateString("cs-CZ", { year:"numeric" });
+    if (range === "1mo" || range === "ytd") return d.toLocaleDateString("cs-CZ", { day:"2-digit", month:"2-digit" });
     return d.toLocaleDateString("cs-CZ", { month:"2-digit", year:"2-digit" });
-  };
-
-  // Two-line tick label: main + sub
-  const fmtTSub = (ts) => {
-    const d = new Date(ts);
-    if (range === "1d") return d.toLocaleDateString("cs-CZ", { day:"2-digit", month:"2-digit" });
-    if (range === "1mo") return null; // already has day+month
-    if (range === "ytd" || range === "1y") return null;
-    if (range === "10y" || range === "max") return null;
-    return null;
   };
 
   const fmtPrice = (v) => v != null ? v.toFixed(2) : "–";
 
-  // Tick marks on X axis — density varies by range
-  const tickCount = range === "1d" ? 8 : range === "1mo" ? 7 : range === "ytd" ? 6 : range === "1y" ? 6 : range === "10y" ? 8 : 8;
+  // Tick marks on X axis (show ~6)
   const xTicks = visibleCandles.length > 0
-    ? visibleCandles.filter((_, i) => i % Math.max(1, Math.floor(visibleCandles.length / tickCount)) === 0)
+    ? visibleCandles.filter((_, i) => i % Math.max(1, Math.floor(visibleCandles.length / 6)) === 0)
     : [];
 
   // Y ticks
@@ -1494,20 +1480,10 @@ function CandlestickChart({ ticker: initialTicker, S }) {
             {/* X axis ticks */}
             {xTicks.map((c, i) => {
               const idx = candles.indexOf(c);
-              const sub = fmtTSub(c.t);
               return (
-                <g key={i}>
-                  <line x1={xS(idx)} y1={H+PAD.volGap+VOL_H} x2={xS(idx)} y2={H+PAD.volGap+VOL_H+3}
-                    stroke={mutedC} strokeWidth="1"/>
-                  <text x={xS(idx)} y={H+PAD.volGap+VOL_H+12} textAnchor="middle" fill={mutedC} fontSize="8.5" fontWeight="600">
-                    {fmtT(c.t)}
-                  </text>
-                  {sub && (
-                    <text x={xS(idx)} y={H+PAD.volGap+VOL_H+22} textAnchor="middle" fill={mutedC} fontSize="7.5" opacity="0.7">
-                      {sub}
-                    </text>
-                  )}
-                </g>
+                <text key={i} x={xS(idx)} y={H+PAD.volGap+VOL_H+14} textAnchor="middle" fill={mutedC} fontSize="8">
+                  {fmtT(c.t)}
+                </text>
               );
             })}
 
@@ -2891,12 +2867,6 @@ export default function App() {
           });
           return updated;
         });
-        // Cache names from price data
-        const newNames = {};
-        Object.entries(data.prices).forEach(([tk, info]) => {
-          if (info.shortName) newNames[tk] = info.shortName;
-        });
-        if (Object.keys(newNames).length) setTickerNames(prev => ({...prev,...newNames}));
         setPricesStatus("ok");
       } else {
         setPricesStatus("error");
@@ -4525,20 +4495,7 @@ export default function App() {
                   <div style={{ fontSize:11, color:"#475569", marginBottom:5 }}>{f.label}</div>
                   {f.type==="select"
                     ?<select value={newTx[f.key]} onChange={e=>{ if(f.onChange) f.onChange(e.target.value); else setNewTx(p=>({...p,[f.key]:e.target.value})); }} style={S.select}>{f.opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
-                    :<input type={f.type} placeholder={f.placeholder} value={newTx[f.key]||""}
-                      onChange={e=>{
-                        const val = f.key==="ticker" ? e.target.value.toUpperCase() : e.target.value;
-                        setNewTx(p=>({...p,[f.key]:val}));
-                      }}
-                      onBlur={f.key==="ticker" ? (e=>{
-                        const tk = e.target.value.toUpperCase();
-                        if(tk && !["VKLAD","VÝBĚR"].includes(tk)) {
-                          lookupTickerName(tk);
-                          const known = tickerNames[tk] || activeTransactions.find(t=>t.ticker===tk)?.name;
-                          if(known) setNewTx(p=>({...p, name:known}));
-                        }
-                      }) : undefined}
-                      style={S.input}/>}
+                    :<input type={f.type} placeholder={f.placeholder} value={newTx[f.key]||""} onChange={e=>setNewTx(p=>({...p,[f.key]:e.target.value}))} style={S.input}/>}
                 </div>
               ))}
             </div>
