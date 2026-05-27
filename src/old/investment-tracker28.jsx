@@ -4090,9 +4090,9 @@ export default function App() {
               const MONTHS_CS = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
               // Build monthly dividend data
               const monthlyData = Array.from({length:12},(_,mi)=>{
-                const received = activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear&&new Date(t.date).getMonth()===mi)
+                const received = activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===selYear&&new Date(t.date).getMonth()===mi)
                   .reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency,rates),0);
-                const upcoming = dividends.filter(d=>new Date(d.date).getFullYear()===divCalYear&&new Date(d.date).getMonth()===mi)
+                const upcoming = dividends.filter(d=>new Date(d.date).getFullYear()===selYear&&new Date(d.date).getMonth()===mi)
                   .reduce((s,d)=>{
                     const pos=portfolio.positions.find(p=>p.ticker===d.ticker);
                     return s+(pos&&d.perShare?toCZK(d.amount*pos.totalQty,d.currency,rates):0);
@@ -4107,9 +4107,9 @@ export default function App() {
                 <>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(148px,1fr))",gap:12,marginBottom:16}}>
                     {[
-                      {label:"Přijato "+divCalYear,value:fmt(totalReceived,"CZK",0),accent:"#10b981"},
+                      {label:"Přijato "+selYear,value:fmt(totalReceived,"CZK",0),accent:"#10b981"},
                       {label:"Očekáváno do konce roku",value:fmt(totalUpcoming,"CZK",0),accent:"#6366f1"},
-                      {label:"Celkem "+divCalYear,value:fmt(totalReceived+totalUpcoming,"CZK",0),accent:"#8b5cf6"},
+                      {label:"Celkem "+selYear,value:fmt(totalReceived+totalUpcoming,"CZK",0),accent:"#8b5cf6"},
                       {label:"Roční odhad (4× kv.)",value:fmt(annualEst,"CZK",0),accent:"#f59e0b"},
                     ].map((s,i)=>(
                       <div key={i} style={S.statCard(s.accent)}>
@@ -4258,9 +4258,9 @@ export default function App() {
                     </div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(170px,1fr))",gap:10,marginBottom:16}}>
                       {monthlyData.map(m=>{
-                        const isCurrentMonth=m.month===now.getMonth()&&divCalYear===now.getFullYear();
-                        const isPast=new Date(divCalYear,m.month+1,1)<=now;
-                        const hasDivs=dividends.filter(d=>new Date(d.date).getMonth()===m.month&&new Date(d.date).getFullYear()===divCalYear);
+                        const isCurrentMonth=m.month===now.getMonth()&&selYear===now.getFullYear();
+                        const isPast=new Date(selYear,m.month+1,1)<=now;
+                        const hasDivs=dividends.filter(d=>new Date(d.date).getMonth()===m.month&&new Date(d.date).getFullYear()===selYear);
                         return(
                           <div key={m.month} style={{background:isCurrentMonth?"#1e2d4a":"#0a0f1e",border:`1px solid ${isCurrentMonth?"#6366f1":"#1e293b"}`,borderRadius:8,padding:12}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
