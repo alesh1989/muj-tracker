@@ -2875,6 +2875,210 @@ const DrawdownChart = ({ transactions, prices, rates, portfolioCurrentCZK=0 }) =
   );
 };
 
+
+// ─── DIGRIN-STYLE DIVIDEND CHART ─────────────────────────────────────────────
+function DigrínDividendChart({ transactions, rates, tickerNames, S, textMuted, textPrimary, border, bgCard, accent, lang }) {
+  const [mode, setMode] = useState("quarterly"); // quarterly | yearly | monthly | bystock
+  const [chartType, setChartType] = useState("stacked"); // stacked | grouped
+  const [tooltip, setTooltip] = useState(null);
+
+  const divTx = transactions.filter(t => t.type === "dividend");
+  if (!divTx.length) return null;
+
+  const DCOLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#3b82f6","#22d3a0","#f97316","#a78bfa","#f43f5e","#84cc16"];
+  const allTickers = [...new Set(divTx.map(t => t.ticker))];
+
+  const getAmt = (t) => toCZK(t.dividendAmount||0, t.currency||"CZK", rates);
+
+  // Build period → ticker → amount
+  const buildData = () => {
+    const map = {};
+    divTx.forEach(t => {
+      const d = new Date(t.date);
+      let key;
+      if (mode === "quarterly") {
+        const q = Math.floor(d.getMonth() / 3) + 1;
+        key = `${d.getFullYear()} Q${q}`;
+      } else if (mode === "yearly") {
+        key = String(d.getFullYear());
+      } else if (mode === "monthly") {
+        key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      } else { // bystock
+        key = t.ticker;
+      }
+      if (!map[key]) map[key] = {};
+      map[key][t.ticker] = (map[key][t.ticker]||0) + getAmt(t);
+    });
+    return map;
+  };
+
+  const data = buildData();
+  const periods = Object.keys(data).sort();
+  const totalAll = divTx.reduce((s,t) => s+getAmt(t), 0);
+
+  // Chart dimensions
+  const cH = 180, cP = {t:14, b:32, l:58, r:12};
+  const iH = cH - cP.t - cP.b;
+  const nPeriods = periods.length;
+  const bW = mode === "grouped"
+    ? Math.max(4, Math.floor(480 / Math.max(nPeriods,1) / allTickers.length) - 1)
+    : Math.max(6, Math.floor(520 / Math.max(nPeriods,1)) - 3);
+  const groupW = chartType === "grouped" ? bW * allTickers.length + (allTickers.length-1)*1 : bW;
+  const totalW = Math.max(560, nPeriods*(groupW+4) + cP.l + cP.r);
+
+  const maxVal = chartType === "stacked"
+    ? Math.max(...periods.map(p => Object.values(data[p]||{}).reduce((s,v)=>s+v,0)), 1)
+    : Math.max(...periods.flatMap(p => Object.values(data[p]||{})), 1);
+
+  const yS = v => cP.t + iH - (v/maxVal)*iH;
+  const fmtK = v => v >= 1e6 ? (v/1e6).toFixed(1)+"M" : v >= 1e3 ? (v/1e3).toFixed(1)+"k" : v.toFixed(0);
+
+  const modeLabels = [
+    {id:"monthly", label:lang==="en"?"Monthly":"Měsíčně"},
+    {id:"quarterly", label:lang==="en"?"Quarterly":"Kvartálně"},
+    {id:"yearly", label:lang==="en"?"Yearly":"Ročně"},
+    {id:"bystock", label:lang==="en"?"By Stock":"Dle akcie"},
+  ];
+
+  return (
+    <div style={S.card}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={S.sectionTitle}>{lang==="en"?"Dividends":"Dividendy"}</div>
+          <div style={{fontSize:11,color:textMuted}}>
+            {lang==="en"?"Total received:":"Celkem přijato:"} <b style={{color:"#10b981"}}>{fmtK(totalAll)} Kč</b>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+          {/* Mode toggle */}
+          <div style={{display:"flex",gap:3}}>
+            {modeLabels.map(m=>(
+              <button key={m.id} onClick={()=>setMode(m.id)}
+                style={{fontSize:10,padding:"4px 10px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:mode===m.id?700:400,
+                  background:mode===m.id?accent+"33":"transparent",
+                  color:mode===m.id?accent:textMuted,
+                  border:`1px solid ${mode===m.id?accent:border}`}}>
+                {m.label}
+              </button>
+            ))}
+          </div>
+          {/* Grouped/Stacked toggle (not for bystock) */}
+          {mode !== "bystock" && (
+            <div style={{display:"flex",gap:3}}>
+              {[["stacked",lang==="en"?"Stacked":"Skládaný"],["grouped",lang==="en"?"Grouped":"Skupinový"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setChartType(v)}
+                  style={{fontSize:10,padding:"4px 10px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:chartType===v?700:400,
+                    background:chartType===v?"#33415533":"transparent",
+                    color:chartType===v?textPrimary:textMuted,
+                    border:`1px solid ${chartType===v?"#475569":border}`}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Tooltip */}
+      {tooltip && (
+        <div style={{fontSize:11,color:textMuted,marginBottom:8,padding:"6px 10px",
+          background:bgCard,borderRadius:8,border:`1px solid ${border}`}}>
+          <b style={{color:textPrimary}}>{tooltip.period}</b>
+          {Object.entries(tooltip.vals).sort((a,b)=>b[1]-a[1]).map(([tk,v])=>(
+            <span key={tk} style={{marginLeft:10}}>
+              <span style={{color:DCOLORS[allTickers.indexOf(tk)%DCOLORS.length]}}>{tickerNames[tk]||tk}</span>: {fmtK(v)} Kč
+            </span>
+          ))}
+          {" · "}
+          <b style={{color:"#10b981"}}>{lang==="en"?"Total:":"Celkem:"} {fmtK(Object.values(tooltip.vals).reduce((s,v)=>s+v,0))} Kč</b>
+        </div>
+      )}
+
+      <div style={{overflowX:"auto"}} onMouseLeave={()=>setTooltip(null)}>
+        <svg viewBox={`0 0 ${totalW} ${cH}`} style={{width:"100%",minWidth:300,height:"auto"}}>
+          {/* Grid */}
+          {[0,0.25,0.5,0.75,1].map((t,i)=>(
+            <g key={i}>
+              <line x1={cP.l} y1={cP.t+iH*t} x2={totalW-cP.r} y2={cP.t+iH*t} stroke={border} strokeWidth="1"/>
+              <text x={cP.l-4} y={cP.t+iH*t+4} textAnchor="end" fill={textMuted} fontSize="8.5">{fmtK(maxVal*(1-t))}</text>
+            </g>
+          ))}
+
+          {/* Bars */}
+          {periods.map((p, pi) => {
+            const pData = data[p]||{};
+            const baseX = cP.l + pi*(groupW+4);
+            const total = Object.values(pData).reduce((s,v)=>s+v,0);
+
+            return (
+              <g key={p}
+                onMouseEnter={()=>setTooltip({period:p, vals:pData})}
+                style={{cursor:"pointer"}}>
+                {chartType === "stacked" ? (
+                  // Stacked bars
+                  (() => {
+                    let yOff = 0;
+                    return allTickers.map((tk,ti) => {
+                      const val = pData[tk]||0;
+                      if (!val) return null;
+                      const barH = Math.max(1, (val/maxVal)*iH);
+                      const y = cP.t + iH - yOff - barH;
+                      yOff += barH;
+                      return (
+                        <rect key={tk} x={baseX} y={y} width={groupW} height={barH}
+                          fill={DCOLORS[ti%DCOLORS.length]} opacity={0.88} rx={1}/>
+                      );
+                    });
+                  })()
+                ) : (
+                  // Grouped bars
+                  allTickers.map((tk,ti) => {
+                    const val = pData[tk]||0;
+                    if (!val) return null;
+                    const barH = Math.max(1, (val/maxVal)*iH);
+                    const x = baseX + ti*(bW+1);
+                    return (
+                      <rect key={tk} x={x} y={cP.t+iH-barH} width={bW} height={barH}
+                        fill={DCOLORS[ti%DCOLORS.length]} opacity={0.85} rx={1}/>
+                    );
+                  })
+                )}
+                {/* Invisible hover zone */}
+                <rect x={baseX} y={cP.t} width={groupW} height={iH} fill="transparent"/>
+                {/* X label */}
+                <text x={baseX+groupW/2} y={cH-8} textAnchor="middle" fill={textMuted} fontSize="8">
+                  {mode==="monthly"?p.slice(2):p}
+                </text>
+                {/* Total label on top if stacked */}
+                {chartType==="stacked" && total > 0 && (
+                  <text x={baseX+groupW/2} y={yS(total)-3} textAnchor="middle" fill={textPrimary} fontSize="7.5" fontWeight="700">
+                    {fmtK(total)}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      {/* Legend */}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:8}}>
+        {allTickers.map((tk,i)=>{
+          const total = Object.values(data).reduce((s,p)=>s+(p[tk]||0),0);
+          return (
+            <span key={tk} style={{fontSize:10,color:textMuted,display:"flex",alignItems:"center",gap:4}}>
+              <span style={{width:10,height:10,borderRadius:2,background:DCOLORS[i%DCOLORS.length],display:"inline-block",flexShrink:0}}/>
+              <span style={{color:textPrimary}}>{tickerNames[tk]||tk}</span>
+              <span style={{color:textMuted}}>({fmtK(total)} Kč)</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   // ─── AUTH STATE ────────────────────────────────────────────────────────
@@ -4287,66 +4491,14 @@ export default function App() {
               })()}
             </div>
 
-            {/* Dividend chart by company */}
-            {(() => {
-              const divTx = activeTransactions.filter(t=>t.type==="dividend");
-              if(!divTx.length) return null;
-              const byMonthAndTicker = {};
-              divTx.forEach(t=>{
-                const d=new Date(t.date);
-                const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
-                if(!byMonthAndTicker[key]) byMonthAndTicker[key]={};
-                byMonthAndTicker[key][t.ticker]=(byMonthAndTicker[key][t.ticker]||0)+toCZK(t.dividendAmount||0,t.currency||"CZK",rates);
-              });
-              const months=Object.keys(byMonthAndTicker).sort().slice(-24);
-              const allTickers=[...new Set(divTx.map(t=>t.ticker))];
-              const DCOLORS=["#6366f1","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#3b82f6","#22d3a0","#f97316","#a78bfa"];
-              const maxMonthVal=Math.max(...months.map(m=>Object.values(byMonthAndTicker[m]||{}).reduce((s,v)=>s+v,0)),1);
-              const bW=Math.max(8,Math.floor(520/Math.max(months.length,1))-3);
-              const cH=140,cP={t:10,b:26,l:52,r:8};
-              const iHc=cH-cP.t-cP.b;
-              const totalW=Math.max(560,months.length*(bW+4)+cP.l+cP.r);
-              return (
-                <div style={S.card}>
-                  <div style={S.sectionTitle}>{lang==="en"?"Dividends by Company (last 24m)":"Dividendy po společnostech (posl. 24 měs.)"}</div>
-                  <div style={{overflowX:"auto"}}>
-                    <svg viewBox={`0 0 ${totalW} ${cH}`} style={{width:"100%",minWidth:300,height:"auto"}}>
-                      {[0,0.25,0.5,0.75,1].map((t2,i)=>(
-                        <g key={i}>
-                          <line x1={cP.l} y1={cP.t+iHc*t2} x2={totalW-cP.r} y2={cP.t+iHc*t2} stroke="#1e2d45" strokeWidth="1"/>
-                          <text x={cP.l-4} y={cP.t+iHc*t2+4} textAnchor="end" fill="#475569" fontSize="8">{(maxMonthVal*(1-t2)/1000).toFixed(1)}k</text>
-                        </g>
-                      ))}
-                      {months.map((m,mi)=>{
-                        const x=cP.l+mi*(bW+4);
-                        let yOff=0;
-                        return (
-                          <g key={m}>
-                            {allTickers.map((tk,ti)=>{
-                              const val=byMonthAndTicker[m]?.[tk]||0;
-                              if(!val) return null;
-                              const barH=Math.max(1,(val/maxMonthVal)*iHc);
-                              const y=cP.t+iHc-yOff-barH;
-                              yOff+=barH;
-                              return <rect key={tk} x={x} y={y} width={bW} height={barH} fill={DCOLORS[ti%DCOLORS.length]} opacity={0.88} rx={1}><title>{tk}: {fmt(val,"CZK",0)}</title></rect>;
-                            })}
-                            <text x={x+bW/2} y={cH-4} textAnchor="middle" fill="#475569" fontSize="7">{m.slice(2)}</text>
-                          </g>
-                        );
-                      })}
-                    </svg>
-                  </div>
-                  <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:8}}>
-                    {allTickers.map((tk,i)=>(
-                      <span key={tk} style={{fontSize:10,color:"#94a3b8",display:"flex",alignItems:"center",gap:4}}>
-                        <span style={{width:10,height:10,borderRadius:2,background:DCOLORS[i%DCOLORS.length],display:"inline-block"}}/>
-                        {tickerNames[tk]||KNOWN_NAMES[tk]||tk}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
+            {/* Digrin-style Dividend Chart */}
+            <DigrínDividendChart
+              transactions={activeTransactions}
+              rates={rates}
+              tickerNames={{...tickerNames,...KNOWN_NAMES}}
+              S={S} textMuted={textMuted} textPrimary={textPrimary}
+              border={border} bgCard={bgCard} accent={accent} lang={lang}
+            />
 
             {/* Monthly calendar */}
             <div style={S.card}>
@@ -4491,6 +4643,234 @@ export default function App() {
           </>
         )}
 
+        {/* ─── DANĚ ČŘ ────────────────────────────────────────────────────────── */}
+        {tab === "dane" && (
+          <>
+            <div style={{fontSize:16,fontWeight:700,color:textPrimary,marginBottom:14}}>
+              🧾 {lang==="en"?"Czech Tax Overview":"Daňový přehled pro ČR"}
+            </div>
+
+            {/* Tax year selector */}
+            {(() => {
+              const taxYears = [...new Set(activeTransactions.map(t=>new Date(t.date).getFullYear()))].sort().reverse();
+              const [taxYear, setTaxYear] = [divCalYear, setDivCalYear]; // reuse divCalYear state
+              const yearTx = activeTransactions.filter(t=>new Date(t.date).getFullYear()===taxYear);
+
+              // Dividendy
+              const divs = yearTx.filter(t=>t.type==="dividend");
+              const divGross = divs.reduce((s,t)=>{
+                const perShare = t.dividendPerShare||0;
+                const qty = t.quantity||1;
+                return s + toCZK(perShare*qty, t.currency||"CZK", rates);
+              },0);
+              const divNet = divs.reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0);
+              const divTaxPaid = divGross - divNet;
+
+              // Prodeje — základ daně (jen akcie držené < 3 roky)
+              const sells = yearTx.filter(t=>t.type==="sell");
+              const taxableSells = sells.map(t=>{
+                const buyTx = activeTransactions.filter(b=>b.type==="buy"&&b.ticker===t.ticker&&new Date(b.date)<new Date(t.date));
+                const avgCostPerShare = buyTx.length>0 ? buyTx.reduce((s,b)=>s+toCZK(b.quantity*b.price+(b.fee||0),b.currency,rates),0)/buyTx.reduce((s,b)=>s+b.quantity,0) : 0;
+                const costCZK = avgCostPerShare * (t.quantity||0);
+                const revenueCZK = toCZK((t.quantity||0)*(t.price||0),t.currency,rates);
+                const gainCZK = revenueCZK - costCZK;
+                const earliestBuy = buyTx.sort((a,b)=>new Date(a.date)-new Date(b.date))[0];
+                const daysHeld2 = earliestBuy ? Math.floor((new Date(t.date)-new Date(earliestBuy.date))/86400000) : 0;
+                const taxExempt = daysHeld2 >= 1095; // 3 roky
+                return {ticker:t.ticker,date:t.date,qty:t.quantity,revenueCZK,costCZK,gainCZK,daysHeld:daysHeld2,taxExempt};
+              });
+              const taxableSellGain = taxableSells.filter(s=>!s.taxExempt&&s.gainCZK>0).reduce((s,t)=>s+t.gainCZK,0);
+              const exemptSellGain = taxableSells.filter(s=>s.taxExempt).reduce((s,t)=>s+t.gainCZK,0);
+              const totalTaxBase = Math.max(0, taxableSellGain) + Math.max(0, divGross);
+              const estimatedTax = totalTaxBase * 0.15;
+
+              return (
+                <div>
+                  {/* Year selector */}
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+                    <span style={{fontSize:12,color:textMuted}}>{lang==="en"?"Tax year:":"Daňový rok:"}</span>
+                    {taxYears.map(y=>(
+                      <button key={y} style={{...S.btn(taxYear===y?"primary":"outline"),padding:"4px 12px",fontSize:11}}
+                        onClick={()=>setDivCalYear(y)}>{y}</button>
+                    ))}
+                  </div>
+
+                  {/* Summary cards */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:16}}>
+                    {[
+                      {l:lang==="en"?"Dividend Income (gross)":"Hrubé dividendy",v:fmt(divGross,"CZK",0),c:"#8b5cf6"},
+                      {l:lang==="en"?"Tax withheld on div.":"Sražená daň z div.",v:fmt(divTaxPaid,"CZK",0),c:"#f87171"},
+                      {l:lang==="en"?"Taxable sell gains":"Zdanitelné zisky z prodeje",v:fmt(taxableSellGain,"CZK",0),c:"#f59e0b"},
+                      {l:lang==="en"?"Exempt sell gains (3y+)":"Osvobozené zisky (3+ roky)",v:fmt(exemptSellGain,"CZK",0),c:"#10b981"},
+                      {l:lang==="en"?"Est. total tax (15%)":"Odhadovaná daň (15%)",v:fmt(estimatedTax,"CZK",0),c:"#ef4444"},
+                    ].map((s,i)=>(
+                      <div key={i} style={{...S.statCard(s.c)}}>
+                        <div style={S.label}>{s.l}</div>
+                        <div style={{fontSize:15,fontWeight:700,color:s.c}}>{s.v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Dividends table */}
+                  <div style={{...S.card,marginBottom:12}}>
+                    <div style={S.sectionTitle}>{lang==="en"?"Dividend Income":"Příjmy z dividend"} {taxYear}</div>
+                    <div style={{fontSize:11,color:textMuted,marginBottom:10}}>
+                      {lang==="en"?"Foreign dividends are typically subject to 15% withholding tax (may vary by tax treaty). Report on §8 of Czech tax return.":"Zahraniční dividendy podléhají srážkové dani 15% (dle smlouvy o zamezení dvojího zdanění). Uvádí se v §8 daňového přiznání."}
+                    </div>
+                    {divs.length > 0 ? (
+                      <table style={S.table}>
+                        <thead><tr>
+                          {["Datum","Ticker","Měna","Hrubá div.","Daň %","Čistá div. (CZK)","Poznámka"].map(h=><th key={h} style={S.th}>{h}</th>)}
+                        </tr></thead>
+                        <tbody>
+                          {divs.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>{
+                            const gross = toCZK((t.dividendPerShare||0)*(t.quantity||1),t.currency||"CZK",rates);
+                            const net = toCZK(t.dividendAmount||0,t.currency||"CZK",rates);
+                            return (
+                              <tr key={t.id}>
+                                <td style={S.td}>{t.date}</td>
+                                <td style={S.td}><b style={{color:textPrimary}}>{t.ticker}</b></td>
+                                <td style={S.td}>{t.currency||"CZK"}</td>
+                                <td style={S.td}>{t.dividendPerShare?`${t.dividendPerShare} ${t.currency}/ks`:"–"}</td>
+                                <td style={S.td}>{t.divTax||15}%</td>
+                                <td style={{...S.td,color:"#10b981",fontWeight:600}}>{fmt(net,"CZK",0)}</td>
+                                <td style={{...S.td,color:textMuted,fontSize:10}}>§8 daň. přiznání</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    ) : <div style={{color:textMuted,fontSize:11}}>{lang==="en"?"No dividends in this year":"Žádné dividendy v tomto roce"}</div>}
+                  </div>
+
+                  {/* Sells table */}
+                  <div style={S.card}>
+                    <div style={S.sectionTitle}>{lang==="en"?"Capital Gains from Sales":"Příjmy z prodeje cenných papírů"} {taxYear}</div>
+                    <div style={{fontSize:11,color:textMuted,marginBottom:10}}>
+                      {lang==="en"?"Gains from stocks held less than 3 years are taxable (§10). Stocks held 3+ years are exempt.":"Zisky z prodeje akcií držených méně než 3 roky jsou zdanitelné (§10). Akcie držené 3+ roky jsou osvobozeny."}
+                    </div>
+                    {taxableSells.length > 0 ? (
+                      <table style={S.table}>
+                        <thead><tr>
+                          {["Datum","Ticker","Počet","Příjem (CZK)","Náklad (CZK)","Zisk/Ztráta","Drženo","Status"].map(h=><th key={h} style={S.th}>{h}</th>)}
+                        </tr></thead>
+                        <tbody>
+                          {taxableSells.map((s,i)=>(
+                            <tr key={i}>
+                              <td style={S.td}>{s.date}</td>
+                              <td style={S.td}><b style={{color:textPrimary}}>{s.ticker}</b></td>
+                              <td style={S.td}>{s.qty}</td>
+                              <td style={S.td}>{fmt(s.revenueCZK,"CZK",0)}</td>
+                              <td style={S.td}>{fmt(s.costCZK,"CZK",0)}</td>
+                              <td style={{...S.td,color:s.gainCZK>=0?"#10b981":"#f87171",fontWeight:600}}>{fmt(s.gainCZK,"CZK",0)}</td>
+                              <td style={S.td}>{s.daysHeld}d</td>
+                              <td style={S.td}>
+                                {s.taxExempt
+                                  ? <span style={{color:"#10b981",fontSize:10}}>✓ Osvobozeno</span>
+                                  : <span style={{color:"#f59e0b",fontSize:10}}>⚠ Zdanitelné</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : <div style={{color:textMuted,fontSize:11}}>{lang==="en"?"No sales in this year":"Žádné prodeje v tomto roce"}</div>}
+                  </div>
+                </div>
+              );
+            })()}
+          </>
+        )}
+
+        {/* ─── PDF REPORT ──────────────────────────────────────────────────────── */}
+        {tab === "report" && (
+          <>
+            <div style={{fontSize:16,fontWeight:700,color:textPrimary,marginBottom:14}}>
+              📄 {lang==="en"?"Annual Report":"Výroční report"}
+            </div>
+            <div style={{...S.card,marginBottom:12}}>
+              <div style={S.sectionTitle}>{lang==="en"?"Generate PDF Report":"Generovat PDF report"}</div>
+              <div style={{fontSize:12,color:textMuted,marginBottom:16,lineHeight:1.7}}>
+                {lang==="en"?"Generate a comprehensive annual report including portfolio summary, top positions, dividend history, annual returns, and tax overview.":"Vygeneruj komplexní výroční report obsahující přehled portfolia, top pozice, historii dividend, roční výnosy a daňový přehled."}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10,marginBottom:16}}>
+                {[
+                  {label:lang==="en"?"Portfolio Value":"Hodnota portfolia",value:fmt(portfolio.totalCurrentCZK,"CZK",0),accent:"#6366f1"},
+                  {label:lang==="en"?"Total Return":"Celkový výnos",value:fmtPct(portfolio.totalGainPct),accent:upColor(portfolio.totalGainPct)},
+                  {label:lang==="en"?"Positions":"Pozice",value:portfolio.positions.length,accent:"#8b5cf6"},
+                  {label:lang==="en"?"Total Dividends":"Celk. dividendy",value:fmt(portfolio.totalDividendsCZK,"CZK",0),accent:"#10b981"},
+                ].map((s,i)=>(
+                  <div key={i} style={{...S.statCard(s.accent),textAlign:"center"}}>
+                    <div style={S.label}>{s.label}</div>
+                    <div style={{fontSize:16,fontWeight:700,color:s.accent}}>{s.value}</div>
+                  </div>
+                ))}
+              </div>
+              <button style={{...S.btn("primary"),padding:"12px 24px",fontSize:13,width:"100%"}}
+                onClick={()=>{
+                  // Generate report as HTML and open print dialog
+                  const reportDate = new Date().toLocaleDateString("cs-CZ");
+                  const rows = portfolio.positions.sort((a,b)=>b.currentValueCZK-a.currentValueCZK).map(p=>`
+                    <tr>
+                      <td>${p.ticker}</td>
+                      <td>${(tickerNames[p.ticker]||p.name||"").slice(0,25)}</td>
+                      <td style="text-align:right">${p.totalQty.toFixed(2)}</td>
+                      <td style="text-align:right">${fmt(p.currentValueCZK,"CZK",0)}</td>
+                      <td style="text-align:right;color:${p.gainPct>=0?"#16a34a":"#dc2626"}">${fmtPct(p.gainPct)}</td>
+                      <td style="text-align:right">${p.annualizedReturn?fmtPct(p.annualizedReturn):"–"}</td>
+                    </tr>`).join("");
+                  const divRows = activeTransactions.filter(t=>t.type==="dividend")
+                    .sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,20).map(t=>`
+                    <tr>
+                      <td>${t.date}</td>
+                      <td>${t.ticker}</td>
+                      <td style="text-align:right">${fmt(toCZK(t.dividendAmount||0,t.currency||"CZK",rates),"CZK",0)}</td>
+                    </tr>`).join("");
+                  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+                    <title>InvestTrack Report ${reportDate}</title>
+                    <style>
+                      body{font-family:sans-serif;color:#1e293b;padding:40px;max-width:900px;margin:0 auto}
+                      h1{color:#4f46e5;border-bottom:3px solid #4f46e5;padding-bottom:10px}
+                      h2{color:#334155;margin-top:30px}
+                      table{width:100%;border-collapse:collapse;margin:10px 0}
+                      th{background:#f1f5f9;padding:8px;text-align:left;font-size:12px;border:1px solid #e2e8f0}
+                      td{padding:7px 8px;border:1px solid #e2e8f0;font-size:12px}
+                      .stat{display:inline-block;margin:8px 16px 8px 0;padding:10px 16px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0}
+                      .stat-label{font-size:10px;color:#64748b;text-transform:uppercase}
+                      .stat-value{font-size:18px;font-weight:700;color:#4f46e5}
+                      @media print{body{padding:20px}}
+                    </style></head><body>
+                    <h1>📈 InvestTrack — Výroční Report</h1>
+                    <p style="color:#64748b">${reportDate} · ${portfolios.find(p=>p.id===activePortfolioId)?.name||"Portfolio"}</p>
+                    <div>
+                      <div class="stat"><div class="stat-label">Aktuální hodnota</div><div class="stat-value">${fmt(portfolio.totalCurrentCZK,"CZK",0)}</div></div>
+                      <div class="stat"><div class="stat-label">Investováno</div><div class="stat-value">${fmt(portfolio.totalInvestedCZK,"CZK",0)}</div></div>
+                      <div class="stat"><div class="stat-label">Zisk/Ztráta</div><div class="stat-value" style="color:${portfolio.totalGainCZK>=0?"#16a34a":"#dc2626"}">${fmt(portfolio.totalGainCZK,"CZK",0)}</div></div>
+                      <div class="stat"><div class="stat-label">Celkový výnos</div><div class="stat-value">${fmtPct(portfolio.totalGainPct)}</div></div>
+                      <div class="stat"><div class="stat-label">Dividendy</div><div class="stat-value">${fmt(portfolio.totalDividendsCZK,"CZK",0)}</div></div>
+                    </div>
+                    <h2>Pozice portfolia</h2>
+                    <table><thead><tr><th>Ticker</th><th>Název</th><th>Množství</th><th>Hodnota</th><th>Výnos %</th><th>Roční výnos</th></tr></thead>
+                    <tbody>${rows}</tbody></table>
+                    <h2>Poslední dividendy (20)</h2>
+                    <table><thead><tr><th>Datum</th><th>Ticker</th><th>Částka (CZK)</th></tr></thead>
+                    <tbody>${divRows}</tbody></table>
+                    <p style="margin-top:40px;color:#94a3b8;font-size:11px">Generováno InvestTrack · ${reportDate} · Pouze informativní, není investiční doporučení.</p>
+                    </body></html>`;
+                  const w = window.open("","_blank");
+                  w.document.write(html);
+                  w.document.close();
+                  setTimeout(()=>w.print(),500);
+                }}>
+                📄 {lang==="en"?"Generate & Print PDF Report":"Generovat a tisknout PDF report"}
+              </button>
+              <div style={{fontSize:11,color:textMuted,marginTop:10,textAlign:"center"}}>
+                {lang==="en"?"Opens print dialog — save as PDF using your browser":"Otevře dialog tisku — ulož jako PDF pomocí prohlížeče"}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ─── DANĚ ČR ─────────────────────────────────────────────────────────── */}
         {/* ─── NASTAVENI ────────────────────────────────────────────────────────── */}
         {tab === "nastaveni" && (
           <>
