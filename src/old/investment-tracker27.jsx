@@ -2683,92 +2683,6 @@ const KNOWN_NAMES = {
   "BABA":"Alibaba", "NKE":"Nike", "PYPL":"PayPal",
 };
 
-
-// ─── DRAWDOWN ANALYSIS ───────────────────────────────────────────────────────
-const DrawdownChart = ({ transactions, prices, rates }) => {
-  const buys = transactions.filter(t=>t.type==="buy").sort((a,b)=>new Date(a.date)-new Date(b.date));
-  if (buys.length < 2) return null;
-
-  // Build monthly portfolio values
-  const firstDate = new Date(buys[0].date);
-  const now = new Date();
-  const points = [];
-  let cursor = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
-  while (cursor <= now) {
-    const txSoFar = buys.filter(t=>new Date(t.date)<=cursor);
-    const holdings = {};
-    txSoFar.forEach(t=>{ holdings[t.ticker]=(holdings[t.ticker]||0)+t.quantity; });
-    let current = 0;
-    Object.entries(holdings).forEach(([ticker,qty])=>{
-      const p = prices[ticker];
-      if(p) current += toCZK(qty*p.price, getTickerCurrency(ticker,p), rates);
-    });
-    points.push({ date:new Date(cursor), value:current, label:`${cursor.getMonth()+1}/${String(cursor.getFullYear()).slice(2)}` });
-    cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
-  }
-
-  // Calculate drawdown series
-  let peak = 0;
-  const ddPoints = points.map(p => {
-    if (p.value > peak) peak = p.value;
-    const dd = peak > 0 ? ((p.value - peak) / peak) * 100 : 0;
-    return { ...p, dd, peak };
-  });
-
-  const maxDD = Math.min(...ddPoints.map(p=>p.dd));
-  const maxDDDate = ddPoints.find(p=>p.dd===maxDD);
-  const currentDD = ddPoints[ddPoints.length-1].dd;
-
-  const w=580, h=120, pad={t:8,b:28,l:52,r:8};
-  const iW=w-pad.l-pad.r, iH=h-pad.t-pad.b;
-  const xS=i=>pad.l+(i/(ddPoints.length-1||1))*iW;
-  const yS=v=>pad.t+iH-(v/Math.min(maxDD*1.1,-0.01))*iH;
-  const step=Math.max(1,Math.floor(ddPoints.length/8));
-  const ddPath=ddPoints.map((p,i)=>`${i===0?"M":"L"}${xS(i)},${yS(p.dd)}`).join(" ");
-  const aPath=ddPath+` L${xS(ddPoints.length-1)},${pad.t+iH} L${xS(0)},${pad.t+iH} Z`;
-
-  return (
-    <div>
-      <div style={{display:"flex",gap:20,marginBottom:10,flexWrap:"wrap"}}>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontSize:9,color:"#5a7399",textTransform:"uppercase",letterSpacing:"0.08em"}}>Max. drawdown</div>
-          <div style={{fontSize:16,fontWeight:700,color:"#f87171"}}>{maxDD.toFixed(1)}%</div>
-          <div style={{fontSize:9,color:"#5a7399"}}>{maxDDDate?.label}</div>
-        </div>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontSize:9,color:"#5a7399",textTransform:"uppercase",letterSpacing:"0.08em"}}>Aktuální DD</div>
-          <div style={{fontSize:16,fontWeight:700,color:currentDD<-5?"#f87171":currentDD<-2?"#f59e0b":"#22d3a0"}}>{currentDD.toFixed(1)}%</div>
-        </div>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontSize:9,color:"#5a7399",textTransform:"uppercase",letterSpacing:"0.08em"}}>Od ATH</div>
-          <div style={{fontSize:16,fontWeight:700,color:"#8b9fc0"}}>{Math.abs(currentDD)<0.1?"✓ ATH":""+Math.abs(currentDD).toFixed(1)+"%"}</div>
-        </div>
-      </div>
-      <div style={{overflowX:"auto"}}>
-        <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",minWidth:280,height:"auto"}}>
-          {[-5,-10,-20,-30].filter(v=>v>=maxDD*1.1).map(v=>(
-            <g key={v}>
-              <line x1={pad.l} y1={yS(v)} x2={w-pad.r} y2={yS(v)} stroke="#1e2d45" strokeWidth="1" strokeDasharray="3,2"/>
-              <text x={pad.l-4} y={yS(v)+4} textAnchor="end" fill="#475569" fontSize="8">{v}%</text>
-            </g>
-          ))}
-          <line x1={pad.l} y1={yS(0)} x2={w-pad.r} y2={yS(0)} stroke="#334155" strokeWidth="1"/>
-          <path d={aPath} fill="#f8717122"/>
-          <path d={ddPath} fill="none" stroke="#f87171" strokeWidth="1.5"/>
-          {ddPoints.map((p,i)=>i%step===0&&(
-            <text key={i} x={xS(i)} y={h-4} textAnchor="middle" fill="#475569" fontSize="8">{p.label}</text>
-          ))}
-          {/* Mark max drawdown */}
-          {maxDDDate && (()=>{
-            const idx=ddPoints.indexOf(maxDDDate);
-            return <circle cx={xS(idx)} cy={yS(maxDDDate.dd)} r="4" fill="#f87171" stroke="#0f1628" strokeWidth="1.5"/>;
-          })()}
-        </svg>
-      </div>
-    </div>
-  );
-};
-
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   // ─── AUTH STATE ────────────────────────────────────────────────────────
@@ -2814,6 +2728,7 @@ export default function App() {
   const [dividends, setDividends] = useState(SAMPLE_DIVIDENDS);
   const [earnings, setEarnings] = useState(SAMPLE_EARNINGS);
   const [fiSettings, setFiSettings] = useState(FI_DEFAULTS);
+  const [divTaxRate, setDivTaxRate] = useState(15); // dividend tax %
   const [tab, setTab] = useState("dashboard");
   const [showAddTx, setShowAddTx] = useState(false);
   const [showCsvImport, setShowCsvImport] = useState(false);
@@ -2857,7 +2772,6 @@ export default function App() {
     });
   };
   const [loaded, setLoaded] = useState(false);
-  const [divCalYear, setDivCalYear] = useState(new Date().getFullYear());
   const [ratesStatus, setRatesStatus] = useState("idle"); // idle | loading | ok | error
 
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | ok | error | offline
@@ -3200,8 +3114,7 @@ export default function App() {
       } else if (t.type === "sell" && holdings[t.ticker]) {
         holdings[t.ticker].totalQty -= t.quantity;
       } else if (t.type === "dividend" && t.dividendAmount) {
-        // dividendAmount is already in CZK (converted at entry time)
-        totalDividendsCZK += t.dividendAmount;
+        totalDividendsCZK += toCZK(t.dividendAmount, t.currency, rates);
       } else if (t.type === "deposit") {
         // Deposits don't count as investment cost - they're cash inflows
       } else if (t.type === "withdraw") {
@@ -3588,7 +3501,75 @@ export default function App() {
             </div>
 
             {/* CHARTS */}
-                        {/* UPCOMING */}
+            {/* Live price ticker strip */}
+            <div style={{ display:"flex", gap:8, overflowX:"auto", marginBottom:12, padding:"2px 0" }}>
+              {portfolio.positions.slice().sort((a,b)=>b.currentValueCZK-a.currentValueCZK).map(p=>(
+                <div key={p.ticker} style={{ flexShrink:0, background:bgCard, borderRadius:10,
+                  padding:"6px 12px", border:`1px solid ${border}`,
+                  display:"flex", gap:8, alignItems:"center" }}>
+                  <span style={{ fontSize:11, fontWeight:700, color:textPrimary }}>{p.ticker}</span>
+                  <span style={{ fontSize:11, color:textSec }}>
+                    {p.currentPrice.toLocaleString("cs-CZ", {minimumFractionDigits:2, maximumFractionDigits:2})} {p.currentCurrency}
+                  </span>
+                  <span style={{ fontSize:10, fontWeight:600, color:upColor(p.change1d) }}>
+                    {p.change1d >= 0 ? "+" : ""}{p.change1d.toFixed(2)}%
+                  </span>
+                </div>
+              ))}
+            </div>
+            
+            <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"2fr 1fr", gap:14, marginBottom:14 }}>
+              <div style={S.card}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+                  <div style={S.sectionTitle}>Vývoj portfolia</div>
+                  <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                    <button style={{ ...S.btn(chartYear===null?"primary":"outline"), padding:"4px 8px", fontSize:10 }} onClick={() => setChartYear(null)}>Vše</button>
+                    {availableYears.map(y => (
+                      <button key={y} style={{ ...S.btn(chartYear===y?"primary":"outline"), padding:"4px 8px", fontSize:10 }} onClick={() => setChartYear(y)}>{y}</button>
+                    ))}
+                  </div>
+                </div>
+                {/* Benchmark toggles */}
+                <div style={{ display:"flex", gap:8, marginBottom:10, flexWrap:"wrap", alignItems:"center" }}>
+                  <span style={{ fontSize:10, color:textMuted }}>Benchmark:</span>
+                  {BENCHMARK_OPTIONS.map(b => (
+                    <button key={b.id} onClick={() => toggleBenchmark(b.id)}
+                      style={{ fontSize:10, padding:"3px 10px", borderRadius:8, cursor:"pointer",
+                        border:`1px solid ${activeBenchmarks.includes(b.id)?b.color:"#334155"}`,
+                        background: activeBenchmarks.includes(b.id)?b.color+"22":"transparent",
+                        color: activeBenchmarks.includes(b.id)?b.color:textMuted, fontFamily:"inherit",
+                        fontWeight: activeBenchmarks.includes(b.id)?700:400 }}>
+                      {activeBenchmarks.includes(b.id)?"✓ ":""}{b.label}
+                    </button>
+                  ))}
+                  {loadingBenchmark && <span style={{fontSize:10,color:textMuted}}>⟳</span>}
+                </div>
+                <GrowthChart transactions={activeTransactions} prices={prices} rates={rates}
+                  yearFilter={chartYear} benchmarks={benchmarks}
+                  activeBenchmarks={activeBenchmarks} benchmarkOptions={BENCHMARK_OPTIONS} />
+              </div>
+              <div style={S.card}>
+                <div style={S.sectionTitle}>Alokace</div>
+                <DonutChart data={[
+                  { label:"Akcie", value:portfolio.positions.filter(p=>p.category==="stock").reduce((s,p)=>s+p.currentValueCZK,0) },
+                  { label:"ETF", value:portfolio.positions.filter(p=>p.category==="etf").reduce((s,p)=>s+p.currentValueCZK,0) },
+                  { label:"Crypto", value:portfolio.positions.filter(p=>p.category==="crypto").reduce((s,p)=>s+p.currentValueCZK,0) },
+                ].filter(d=>d.value>0)} />
+              </div>
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+              <div style={S.card}>
+                <div style={S.sectionTitle}>Top pozice (CZK)</div>
+                <BarChart data={portfolio.positions.sort((a,b)=>b.currentValueCZK-a.currentValueCZK).slice(0,6).map(p=>({ label:p.ticker, value:p.currentValueCZK }))} />
+              </div>
+              <div style={S.card}>
+                <div style={S.sectionTitle}>Roční výnosy</div>
+                <AnnualReturnChart transactions={activeTransactions} prices={prices} rates={rates} />
+              </div>
+            </div>
+
+            {/* UPCOMING */}
             <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:14 }}>
               <div style={S.card}>
                 <div style={S.sectionTitle}>📅 Nadcházející dividendy</div>
@@ -4086,7 +4067,7 @@ export default function App() {
             <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:14 }}>📅 Dividendový kalendář</div>
             {(() => {
               const now = new Date();
-
+              const selYear = now.getFullYear();
               const MONTHS_CS = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
               // Build monthly dividend data
               const monthlyData = Array.from({length:12},(_,mi)=>{
@@ -4243,19 +4224,7 @@ export default function App() {
 
                   {/* MONTHLY CALENDAR GRID */}
                   <div style={S.card}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                      <div style={S.sectionTitle}>Měsíční přehled {divCalYear}</div>
-                      <div style={{display:"flex",alignItems:"center",gap:6}}>
-                        <button style={{...S.btn("outline"),padding:"3px 10px",fontSize:12}}
-                          onClick={()=>setDivCalYear(y=>Math.max(y-1, (() => {
-                            const yrs=[...new Set(activeTransactions.filter(t=>t.type==="buy").map(t=>new Date(t.date).getFullYear()))];
-                            return yrs.length?Math.min(...yrs):new Date().getFullYear()-5;
-                          })()))}>◀</button>
-                        <span style={{fontSize:12,fontWeight:700,color:textPrimary,minWidth:40,textAlign:"center"}}>{divCalYear}</span>
-                        <button style={{...S.btn("outline"),padding:"3px 10px",fontSize:12}}
-                          onClick={()=>setDivCalYear(y=>Math.min(y+1,new Date().getFullYear()))}>▶</button>
-                      </div>
-                    </div>
+                    <div style={S.sectionTitle}>Měsíční přehled {selYear}</div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(170px,1fr))",gap:10,marginBottom:16}}>
                       {monthlyData.map(m=>{
                         const isCurrentMonth=m.month===now.getMonth()&&selYear===now.getFullYear();
@@ -4580,7 +4549,21 @@ export default function App() {
                 <div style={{ fontSize:10, color:"#475569", marginTop:6 }}>Kurzy se automaticky aktualizují každé 4 hodiny.</div>
               </div>
               <div style={S.card}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                {/* Dividend tax rate */}
+              <div style={{...S.card, marginBottom:12}}>
+                <div style={S.sectionTitle}>Daňová sazba z dividend</div>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <input type="number" min="0" max="50" value={divTaxRate}
+                    onChange={e=>setDivTaxRate(parseFloat(e.target.value)||0)}
+                    style={{...S.input,width:80}}/>
+                  <span style={{fontSize:12,color:textSec}}>%</span>
+                  <span style={{fontSize:11,color:textMuted}}>
+                    Česká daň z dividend: 15% (tuzemské) nebo dle DTT (zahraniční)
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
                 <div style={S.sectionTitle} >Ceny akcií</div>
                 <button style={{ ...S.btn("primary"), padding:"6px 14px", fontSize:11 }}
                   onClick={() => {
