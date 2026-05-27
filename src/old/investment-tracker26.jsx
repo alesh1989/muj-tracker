@@ -172,7 +172,7 @@ const BarChart = ({ data }) => {
 };
 
 // ─── GROWTH CHART (from first transaction → now) ──────────────────────────────
-const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, activeBenchmarks=[], benchmarkOptions=[] }) => {
+const GrowthChart = ({ transactions, prices, rates, yearFilter }) => {
   const buys = transactions.filter(t => t.type === "buy").sort((a, b) => new Date(a.date) - new Date(b.date));
   if (!buys.length) return <div style={{ color: "#475569", fontSize: 12 }}>Žádné transakce</div>;
 
@@ -238,26 +238,6 @@ const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, a
         <path d={iPath} fill="none" stroke="#334155" strokeWidth="1.5" strokeDasharray="4,3" />
         <path d={cPath} fill="none" stroke="#6366f1" strokeWidth="2" />
         <circle cx={xS(points.length-1)} cy={yS(points[points.length-1].current)} r="3" fill="#6366f1" />
-        {/* Benchmark lines — normalized to portfolio start value */}
-        {benchmarkOptions.filter(b=>activeBenchmarks.includes(b.id)&&benchmarks[b.id]?.length).map(b=>{
-          const bData = benchmarks[b.id];
-          if(!bData||!points.length) return null;
-          const startDate = points[0].date;
-          const endDate = points[points.length-1].date;
-          // Filter benchmark candles to match chart date range
-          const filtered = bData.filter(c=>new Date(c.t)>=startDate&&new Date(c.t)<=endDate);
-          if(filtered.length<2) return null;
-          const basePrice = filtered[0].c;
-          const portfolioStart = points[0].current||points.find(p=>p.current>0)?.current||1;
-          // Normalize: benchmark % change applied to portfolio start value
-          const bPoints = filtered.map((c,i)=>{
-            const ratio = c.c/basePrice;
-            const xPct = (new Date(c.t)-startDate)/(endDate-startDate);
-            return { x: pad.l+xPct*iW, y: yS2(portfolioStart*ratio) };
-          });
-          const path = bPoints.map((p,i)=>`${i===0?"M":"L"}${p.x},${p.y}`).join(" ");
-          return <path key={b.id} d={path} fill="none" stroke={b.color} strokeWidth="1.5" opacity={0.8} strokeDasharray="6,2"/>;
-        })}
       </svg>
       <div style={{ display: "flex", gap: 16, marginTop: 6, fontSize: 10, color: "#94a3b8" }}>
         <span><span style={{ color: "#6366f1" }}>──</span> Hodnota portfolia</span>
@@ -2721,38 +2701,6 @@ export default function App() {
   const [sortDir, setSortDir] = useState("desc"); // asc|desc
   const [viewMode, setViewMode] = useState("table"); // table|heatmap|cards
   const [chartYear, setChartYear] = useState(null); // null = all time
-  const [benchmarks, setBenchmarks] = useState({}); // {SPY: [{t, c}], ...}
-  const [activeBenchmarks, setActiveBenchmarks] = useState([]); // ["SPY","GLD",...]
-  const [loadingBenchmark, setLoadingBenchmark] = useState(false);
-
-  const BENCHMARK_OPTIONS = [
-    { id:"SPY",  label:"S&P 500",    color:"#f59e0b" },
-    { id:"QQQ",  label:"NASDAQ 100", color:"#6366f1" },
-    { id:"DIA",  label:"Dow Jones",  color:"#ec4899" },
-    { id:"GLD",  label:"Zlato",      color:"#fbbf24" },
-    { id:"BRK-B",label:"BRK.B",     color:"#22d3a0" },
-  ];
-
-  const fetchBenchmark = async (ticker) => {
-    if (benchmarks[ticker]) return; // already loaded
-    setLoadingBenchmark(true);
-    try {
-      const res = await fetch(`/api/chart?ticker=${encodeURIComponent(ticker)}&range=max`);
-      const data = await res.json();
-      if (data.candles?.length) {
-        setBenchmarks(prev => ({ ...prev, [ticker]: data.candles }));
-      }
-    } catch(e) { console.warn("benchmark fetch:", e.message); }
-    setLoadingBenchmark(false);
-  };
-
-  const toggleBenchmark = (id) => {
-    setActiveBenchmarks(prev => {
-      if (prev.includes(id)) return prev.filter(x => x !== id);
-      fetchBenchmark(id);
-      return [...prev, id];
-    });
-  };
   const [loaded, setLoaded] = useState(false);
   const [ratesStatus, setRatesStatus] = useState("idle"); // idle | loading | ok | error
 
@@ -3307,8 +3255,8 @@ export default function App() {
   };
 
   const t = T[lang] || T.cs; // current translations
-  const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b", cash:"#22d3a0", real_estate:"#f97316" };
-  const catLabel = { stock:t.stocks, etf:t.etf, crypto:t.crypto, cash:lang==="en"?"Cash":"Hotovost", real_estate:lang==="en"?"Real Estate":"Nemovitosti" };
+  const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b", cash:"#22d3a0" };
+  const catLabel = { stock:t.stocks, etf:t.etf, crypto:t.crypto, cash:lang==="en"?"Cash":"Hotovost" };
 
   const TABS = ["dashboard","portfolio","transakce","cashflow","dividendy","novinky","analyza","fi","nastaveni"];
   const TAB_LABELS = { dashboard:t.dashboard, portfolio:t.portfolio, transakce:t.transakce, cashflow:t.cashflow, dividendy:t.dividendy, novinky:t.novinky, analyza:t.analyza, fi:t.fi, nastaveni:t.nastaveni };
@@ -3499,7 +3447,28 @@ export default function App() {
                 </div>
               ))}
             </div>
-            
+            {/* Live price ticker strip */}
+            <div style={{ display:"flex", gap:8, overflowX:"auto", marginBottom:12, padding:"4px 0",
+              scrollbarWidth:"none", msOverflowStyle:"none" }}>
+              {portfolio.positions.slice().sort((a,b)=>b.currentValueCZK-a.currentValueCZK).map(p=>(
+                <div key={p.ticker} style={{ flexShrink:0, background:bgCard, borderRadius:10,
+                  padding:"6px 14px", border:`1px solid ${border}`,
+                  display:"flex", gap:10, alignItems:"center" }}>
+                  <span style={{ fontSize:11, fontWeight:800, color:textPrimary }}>{p.ticker}</span>
+                  <span style={{ fontSize:11, color:textSec }}>
+                    {p.currentPrice > 0
+                      ? p.currentPrice.toLocaleString("cs-CZ", {minimumFractionDigits:2, maximumFractionDigits:2}) + " " + p.currentCurrency
+                      : "–"}
+                  </span>
+                  {p.change1d !== 0 && (
+                    <span style={{ fontSize:10, fontWeight:700, color:upColor(p.change1d),
+                      background: upColor(p.change1d) + "22", padding:"2px 6px", borderRadius:6 }}>
+                      {p.change1d >= 0 ? "+" : ""}{p.change1d.toFixed(2)}%
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
             <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"2fr 1fr", gap:14, marginBottom:14 }}>
               <div style={S.card}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
@@ -3511,24 +3480,7 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-                {/* Benchmark toggles */}
-                <div style={{ display:"flex", gap:8, marginBottom:10, flexWrap:"wrap", alignItems:"center" }}>
-                  <span style={{ fontSize:10, color:textMuted }}>Benchmark:</span>
-                  {BENCHMARK_OPTIONS.map(b => (
-                    <button key={b.id} onClick={() => toggleBenchmark(b.id)}
-                      style={{ fontSize:10, padding:"3px 10px", borderRadius:8, cursor:"pointer",
-                        border:`1px solid ${activeBenchmarks.includes(b.id)?b.color:"#334155"}`,
-                        background: activeBenchmarks.includes(b.id)?b.color+"22":"transparent",
-                        color: activeBenchmarks.includes(b.id)?b.color:textMuted, fontFamily:"inherit",
-                        fontWeight: activeBenchmarks.includes(b.id)?700:400 }}>
-                      {activeBenchmarks.includes(b.id)?"✓ ":""}{b.label}
-                    </button>
-                  ))}
-                  {loadingBenchmark && <span style={{fontSize:10,color:textMuted}}>⟳</span>}
-                </div>
-                <GrowthChart transactions={activeTransactions} prices={prices} rates={rates}
-                  yearFilter={chartYear} benchmarks={benchmarks}
-                  activeBenchmarks={activeBenchmarks} benchmarkOptions={BENCHMARK_OPTIONS} />
+                <GrowthChart transactions={activeTransactions} prices={prices} rates={rates} yearFilter={chartYear} />
               </div>
               <div style={S.card}>
                 <div style={S.sectionTitle}>Alokace</div>
@@ -3586,52 +3538,6 @@ export default function App() {
         {/* ─── PORTFOLIO TAB ─────────────────────────────────────────────── */}
         {tab === "portfolio" && (
           <>
-                        {/* Portfolio fundamental metrics */}
-            {(() => {
-              const stockPos = portfolio.positions.filter(p=>p.category==="stock"||p.category==="etf");
-              const totalStockVal = stockPos.reduce((s,p)=>s+p.currentValueCZK,0)||1;
-              const wAvg = (fn) => {
-                const vals = stockPos.map(p=>({w:p.currentValueCZK/totalStockVal,v:fn(p)})).filter(x=>x.v&&x.v>0);
-                if(!vals.length) return null;
-                return vals.reduce((s,x)=>s+x.w*x.v,0);
-              };
-              const gm = (tk,key) => prices[tk]?.[key]||null;
-              const metrics = [
-                {l:"P/E",      v:wAvg(p=>gm(p.ticker,"pe")),       fmt:v=>v.toFixed(1),     accent:"#6366f1", info:"Price/Earnings — valuační násobek"},
-                {l:"Forw. P/E",v:wAvg(p=>gm(p.ticker,"forwardPe")),fmt:v=>v.toFixed(1),     accent:"#3b82f6", info:"Forward P/E (odhad příštích 12m)"},
-                {l:"P/B",      v:wAvg(p=>gm(p.ticker,"pb")),       fmt:v=>v.toFixed(2),     accent:"#8b5cf6", info:"Price/Book — cena vs účetní hodnota"},
-                {l:"P/S",      v:wAvg(p=>gm(p.ticker,"ps")),       fmt:v=>v.toFixed(2),     accent:"#ec4899", info:"Price/Sales — cena vs tržby"},
-                {l:"ROE",      v:wAvg(p=>gm(p.ticker,"roe")),      fmt:v=>v.toFixed(1)+"%", accent:"#10b981", info:"Return on Equity > 15% = výborné"},
-                {l:"ROA",      v:wAvg(p=>gm(p.ticker,"roa")),      fmt:v=>v.toFixed(1)+"%", accent:"#22d3a0", info:"Return on Assets"},
-                {l:"Net Margin",v:wAvg(p=>gm(p.ticker,"netMargin")),fmt:v=>v.toFixed(1)+"%",accent:"#f59e0b", info:"Čistá zisková marže"},
-                {l:"Beta",     v:wAvg(p=>gm(p.ticker,"beta")),     fmt:v=>v.toFixed(2),     accent:"#f97316", info:"Tržní beta — volatilita vs S&P500"},
-              ];
-              const hasData = metrics.some(m=>m.v!==null);
-              if(!hasData) return (
-                <div style={{...S.card,marginBottom:12,opacity:0.6}}>
-                  <div style={{fontSize:11,color:textMuted,textAlign:"center",padding:"8px 0"}}>
-                    📊 Fundamentální metriky portfolia (P/E, ROE, ...) se zobrazí po přidání
-                    <b style={{color:accent}}> FINNHUB_KEY</b> do Vercel Environment Variables
-                  </div>
-                </div>
-              );
-              return (
-                <div style={{...S.card,marginBottom:12}}>
-                  <div style={S.sectionTitle}>Fundamentální metriky portfolia (vážený průměr)</div>
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:10}}>
-                    {metrics.map((m,i)=>(
-                      <div key={i} title={m.info} style={{background:darkMode?"#0a0f1e":"#f8fafc",
-                        borderRadius:10,padding:"10px 12px",border:`1px solid ${m.accent}33`,textAlign:"center",cursor:"help"}}>
-                        <div style={{fontSize:9,color:textMuted,letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:4}}>{m.l}</div>
-                        <div style={{fontSize:18,fontWeight:800,color:m.v!==null?m.accent:textMuted}}>{m.v!==null?m.fmt(m.v):"–"}</div>
-                        <div style={{fontSize:8,color:textMuted,marginTop:3}}>{m.info.split("—")[0]}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-
             {/* Summary stats row */}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:14 }}>
               {[
@@ -3652,9 +3558,9 @@ export default function App() {
             {/* Controls */}
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, flexWrap:"wrap", gap:8 }}>
               <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                {["all","stock","etf","crypto","real_estate"].map(c => (
+                {["all","stock","etf","crypto"].map(c => (
                   <button key={c} style={{ ...S.btn(filterCat===c?"primary":"outline"), padding:"5px 10px", fontSize:10 }} onClick={() => setFilterCat(c)}>
-                    {c==="all"?(lang==="en"?"All":"Vše"):catLabel[c]||c}
+                    {c==="all"?"Vše":catLabel[c]}
                   </button>
                 ))}
               </div>
@@ -3722,7 +3628,7 @@ export default function App() {
                         <tr key={p.ticker} style={{ borderLeft:`2px solid ${catColor[p.category]||"#334155"}` }}>
                           <td style={S.td}>
                             <div style={{fontWeight:700,color:"#f1f5f9"}}>{p.ticker}</div>
-                            <div style={{fontSize:9,color:"#475569"}}>{(tickerNames[p.ticker]||KNOWN_NAMES[p.ticker]||p.name||"")?.slice(0,20)}</div>
+                            <div style={{fontSize:9,color:"#475569"}}>{p.name?.slice(0,18)}</div>
                             <span style={S.badge(catColor[p.category]||"#64748b")}>{catLabel[p.category]}</span>
                           </td>
                           <td style={S.td}>
@@ -4081,128 +3987,6 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-
-                  {/* DIVIDENDS BY COMPANY CHART */}
-                  {(() => {
-                    const divTx = activeTransactions.filter(t=>t.type==="dividend");
-                    if(!divTx.length) return null;
-                    const byMonthAndTicker = {};
-                    divTx.forEach(t=>{
-                      const d = new Date(t.date);
-                      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
-                      if(!byMonthAndTicker[key]) byMonthAndTicker[key]={};
-                      if(!byMonthAndTicker[key][t.ticker]) byMonthAndTicker[key][t.ticker]=0;
-                      byMonthAndTicker[key][t.ticker]+=toCZK(t.dividendAmount||0,t.currency,rates);
-                    });
-                    const months = Object.keys(byMonthAndTicker).sort().slice(-24);
-                    const allTickers = [...new Set(divTx.map(t=>t.ticker))];
-                    const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#3b82f6","#22d3a0","#f97316","#a78bfa"];
-                    const maxMonthVal = Math.max(...months.map(m=>Object.values(byMonthAndTicker[m]||{}).reduce((s,v)=>s+v,0)),1);
-                    const barW = Math.max(8, Math.floor(540/months.length)-3);
-                    const chartH = 140, chartPad = {t:10,b:28,l:50,r:8};
-                    const iH2 = chartH-chartPad.t-chartPad.b;
-                    return (
-                      <div style={S.card}>
-                        <div style={S.sectionTitle}>Dividendy po společnostech (posl. 24 měsíců)</div>
-                        <div style={{overflowX:"auto"}}>
-                          <svg viewBox={`0 0 ${Math.max(560,months.length*(barW+4)+60)} ${chartH}`} style={{width:"100%",minWidth:320,height:"auto"}}>
-                            {[0,0.25,0.5,0.75,1].map((t,i)=>(
-                              <g key={i}>
-                                <line x1={chartPad.l} y1={chartPad.t+iH2*t} x2={Math.max(560,months.length*(barW+4)+60)-chartPad.r} y2={chartPad.t+iH2*t} stroke="#1e293b" strokeWidth="1"/>
-                                <text x={chartPad.l-4} y={chartPad.t+iH2*t+4} textAnchor="end" fill="#475569" fontSize="8">{(maxMonthVal*(1-t)/1000).toFixed(0)}k</text>
-                              </g>
-                            ))}
-                            {months.map((m,mi)=>{
-                              const x = chartPad.l + mi*(barW+4);
-                              let yOffset = 0;
-                              return (
-                                <g key={m}>
-                                  {allTickers.map((tk,ti)=>{
-                                    const val = byMonthAndTicker[m]?.[tk]||0;
-                                    if(!val) return null;
-                                    const barH = (val/maxMonthVal)*iH2;
-                                    const y = chartPad.t+iH2-yOffset-barH;
-                                    yOffset+=barH;
-                                    return <rect key={tk} x={x} y={y} width={barW} height={barH} fill={COLORS[ti%COLORS.length]} opacity={0.85} rx={1}/>;
-                                  })}
-                                  <text x={x+barW/2} y={chartH-4} textAnchor="middle" fill="#475569" fontSize="7">{m.slice(2)}</text>
-                                </g>
-                              );
-                            })}
-                          </svg>
-                        </div>
-                        <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:8}}>
-                          {allTickers.map((tk,i)=>(
-                            <span key={tk} style={{fontSize:10,color:"#94a3b8",display:"flex",alignItems:"center",gap:4}}>
-                              <span style={{width:10,height:10,borderRadius:2,background:COLORS[i%COLORS.length],display:"inline-block"}}/>
-                              {tk}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {/* DIVIDENDS BY COMPANY STACKED BAR CHART */}
-                  {(() => {
-                    const divTx = activeTransactions.filter(t=>t.type==="dividend");
-                    if(!divTx.length) return null;
-                    const byMonthAndTicker = {};
-                    divTx.forEach(t=>{
-                      const d = new Date(t.date);
-                      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
-                      if(!byMonthAndTicker[key]) byMonthAndTicker[key]={};
-                      byMonthAndTicker[key][t.ticker]=(byMonthAndTicker[key][t.ticker]||0)+toCZK(t.dividendAmount||0,t.currency,rates);
-                    });
-                    const months = Object.keys(byMonthAndTicker).sort().slice(-24);
-                    const allTickers = [...new Set(divTx.map(t=>t.ticker))];
-                    const DCOLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#3b82f6","#22d3a0","#f97316","#a78bfa"];
-                    const maxMonthVal = Math.max(...months.map(m=>Object.values(byMonthAndTicker[m]||{}).reduce((s,v)=>s+v,0)),1);
-                    const bW = Math.max(8,Math.floor(520/Math.max(months.length,1))-3);
-                    const cH=140, cP={t:10,b:26,l:52,r:8};
-                    const iHc = cH-cP.t-cP.b;
-                    const totalW = Math.max(560, months.length*(bW+4)+cP.l+cP.r);
-                    return (
-                      <div style={S.card}>
-                        <div style={S.sectionTitle}>Dividendy po společnostech (posl. 24 měs.)</div>
-                        <div style={{overflowX:"auto"}}>
-                          <svg viewBox={`0 0 ${totalW} ${cH}`} style={{width:"100%",minWidth:300,height:"auto"}}>
-                            {[0,0.25,0.5,0.75,1].map((t2,i)=>(
-                              <g key={i}>
-                                <line x1={cP.l} y1={cP.t+iHc*t2} x2={totalW-cP.r} y2={cP.t+iHc*t2} stroke="#1e2d45" strokeWidth="1"/>
-                                <text x={cP.l-4} y={cP.t+iHc*t2+4} textAnchor="end" fill="#475569" fontSize="8">
-                                  {(maxMonthVal*(1-t2)/1000).toFixed(1)}k
-                                </text>
-                              </g>
-                            ))}
-                            {months.map((m,mi)=>{
-                              const x = cP.l + mi*(bW+4);
-                              let yOff = 0;
-                              const bars = allTickers.map((tk,ti)=>{
-                                const val = byMonthAndTicker[m]?.[tk]||0;
-                                if(!val) return null;
-                                const barH = Math.max(1,(val/maxMonthVal)*iHc);
-                                const y = cP.t+iHc-yOff-barH;
-                                yOff+=barH;
-                                return <rect key={tk} x={x} y={y} width={bW} height={barH} fill={DCOLORS[ti%DCOLORS.length]} opacity={0.88} rx={1}>
-                                  <title>{tk}: {fmt(val,"CZK",0)}</title>
-                                </rect>;
-                              });
-                              return <g key={m}>{bars}<text x={x+bW/2} y={cH-4} textAnchor="middle" fill="#475569" fontSize="7">{m.slice(2)}</text></g>;
-                            })}
-                          </svg>
-                        </div>
-                        <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:8}}>
-                          {allTickers.map((tk,i)=>(
-                            <span key={tk} style={{fontSize:10,color:"#94a3b8",display:"flex",alignItems:"center",gap:4}}>
-                              <span style={{width:10,height:10,borderRadius:2,background:DCOLORS[i%DCOLORS.length],display:"inline-block"}}/>
-                              {tickerNames[tk]||KNOWN_NAMES[tk]||tk}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })()}
 
                   {/* MONTHLY CALENDAR GRID */}
                   <div style={S.card}>
@@ -4742,7 +4526,7 @@ export default function App() {
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               {[
                 {label:"Typ",key:"type",type:"select",opts:[["buy","Nákup"],["sell","Prodej"],["dividend","Dividenda"],["deposit","Vklad"],["withdraw","Výběr"]]},
-                {label:"Kategorie",key:"category",type:"select",opts:[["stock","Akcie"],["etf","ETF"],["crypto","Crypto"],["real_estate","Nemovitosti"],["cash","Hotovost"]]},
+                {label:"Kategorie",key:"category",type:"select",opts:[["stock","Akcie"],["etf","ETF"],["crypto","Crypto"],["cash","Hotovost"]]},
                 ...(editTx.type!=="deposit"&&editTx.type!=="withdraw"?[
                   {label:"Ticker",key:"ticker",type:"text",placeholder:"AAPL"},
                   {label:`Název ${tickerNames[newTx.ticker?.toUpperCase()]?"(auto: "+tickerNames[newTx.ticker?.toUpperCase()]+")":""}`,key:"name",type:"text",placeholder:tickerNames[newTx.ticker?.toUpperCase()]||"Apple Inc."},
@@ -4808,7 +4592,7 @@ export default function App() {
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
               {[
                 {label:"Typ",key:"type",type:"select",opts:[["buy","Nákup"],["sell","Prodej"],["dividend","Dividenda"],["deposit","Vklad"],["withdraw","Výběr"]],onChange:(v)=>{ if(v==="deposit"||v==="withdraw") setNewTx(p=>({...p,type:v,category:"cash",ticker:"",name:""})); else setNewTx(p=>({...p,type:v,category:p.category==="cash"?"stock":p.category})); }},
-                {label:"Kategorie",key:"category",type:"select",opts:[["stock","Akcie"],["etf","ETF"],["crypto","Crypto"],["real_estate","Nemovitosti"],["cash","Hotovost"]]},
+                {label:"Kategorie",key:"category",type:"select",opts:[["stock","Akcie"],["etf","ETF"],["crypto","Crypto"],["cash","Hotovost"]]},
                 ...(newTx.type!=="deposit"&&newTx.type!=="withdraw"?[
                   {label:"Ticker",key:"ticker",type:"text",placeholder:"AAPL"},
                   {label:`Název ${tickerNames[newTx.ticker?.toUpperCase()]?"(auto: "+tickerNames[newTx.ticker?.toUpperCase()]+")":""}`,key:"name",type:"text",placeholder:tickerNames[newTx.ticker?.toUpperCase()]||"Apple Inc."},

@@ -106,13 +106,33 @@ export default async function handler(req, res) {
       results[ticker] = { price: 0, currency: isCzkTicker ? "CZK" : "USD", change1d: 0, shortName, lastUpdated: new Date().toISOString(), source: "fallback" };
     }
 
-      // Fetch company name if not in KNOWN_NAMES
-      if (!KNOWN_NAMES[ticker] && finnhubKey) {
-        const name = await fetchFinnhubProfile(ticker, finnhubKey);
-        if (name) {
-          results[ticker].shortName = name;
-          fetchedNames[ticker] = name;
-        }
+      // Fetch company name and fundamentals if not in KNOWN_NAMES
+      if (finnhubKey) {
+        try {
+          const profUrl = `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(TICKER_MAP[ticker]||ticker)}&token=${finnhubKey}`;
+          const profR = await fetch(profUrl, {signal:AbortSignal.timeout(6000)});
+          if (profR.ok) {
+            const prof = await profR.json();
+            if (prof?.name) { results[ticker].shortName = prof.name; fetchedNames[ticker] = prof.name; }
+          }
+          // Fetch basic financials for P/E, P/B, ROE etc.
+          const metUrl = `https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(TICKER_MAP[ticker]||ticker)}&metric=all&token=${finnhubKey}`;
+          const metR = await fetch(metUrl, {signal:AbortSignal.timeout(6000)});
+          if (metR.ok) {
+            const met = await metR.json();
+            const m = met?.metric || {};
+            if (Object.keys(m).length) {
+              results[ticker].pe = m.peNormalizedAnnual || m.peBasicExclExtraTTM || null;
+              results[ticker].forwardPe = m.forwardPE || null;
+              results[ticker].pb = m.pbAnnual || m.pbQuarterly || null;
+              results[ticker].ps = m.psAnnual || m.psTTM || null;
+              results[ticker].roe = m.roeRfy ? m.roeRfy * 100 : (m.roeTTM ? m.roeTTM * 100 : null);
+              results[ticker].roa = m.roaRfy ? m.roaRfy * 100 : (m.roaTTM ? m.roaTTM * 100 : null);
+              results[ticker].netMargin = m.netProfitMarginAnnual || m.netProfitMarginTTM || null;
+              results[ticker].beta = m["52WeekPriceReturnDaily"] ? null : m.beta || null;
+            }
+          }
+        } catch(e) { console.warn("Finnhub profile/metrics error:", ticker, e.message); }
       }
     }));
   } else if (avKey) {
