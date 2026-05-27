@@ -4079,8 +4079,7 @@ export default function App() {
                 <button style={{ ...S.btn("outline") }} onClick={() => {
                   const headers = ["type","ticker","name","category","date","quantity","price","currency","fee","dividendAmount","amount","notes"];
                   const rows = activeTransactions.map(t => headers.map(h => { const v=t[h]??""; return String(v).includes(",") ? `"${v}"` : v; }).join(","));
-                  const csv = [headers.join(","), ...rows].join("
-");
+                  const csv = [headers.join(","), ...rows].join("\n");
                   const blob = new Blob([csv], { type:"text/csv;charset=utf-8;" });
                   const a = document.createElement("a");
                   a.href = URL.createObjectURL(blob);
