@@ -1,6 +1,16 @@
-// Vercel Serverless Function — Stock price fetcher
-// Uses multiple free APIs with fallback
+// Vercel Serverless Function — Multi-source stock price fetcher
 export const config = { runtime: "nodejs" };
+
+// Normalize ticker for different exchanges
+function normalizeTicker(ticker) {
+  // FRA:TBK -> TBK.F (Frankfurt), CEZ -> CEZ.PR (Prague), MM0 -> MM0.DE
+  const map = {
+    "FRA:TBK": "PM", // Philip Morris International (approximation)
+    "CEZ": "CEZ.PR",
+    "MM0": "MNETA.PR",
+  };
+  return map[ticker] || ticker;
+}
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -18,127 +28,122 @@ export default async function handler(req, res) {
       for await (const chunk of req) chunks.push(chunk);
       body = JSON.parse(Buffer.concat(chunks).toString());
     }
-  } catch(e) { return res.status(400).json({ error: "Invalid JSON: " + e.message }); }
+  } catch(e) { return res.status(400).json({ error: "Invalid JSON" }); }
 
   const { tickers } = body;
-  if (!tickers || !Array.isArray(tickers) || tickers.length === 0) {
-    return res.status(400).json({ error: "Chybí seznam tickerů" });
-  }
+  if (!tickers?.length) return res.status(200).json({ prices: {} });
 
   const stockTickers = [...new Set(tickers.filter(t =>
     t && !["VKLAD","VÝBĚR",""].includes(t)
   ))];
 
-  if (stockTickers.length === 0) return res.status(200).json({ prices: {} });
-
   const results = {};
 
-  // ── METHOD 1: Yahoo Finance (with proper headers) ────────────────────────
-  try {
-    const symbols = stockTickers.join(",");
-    const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}&fields=regularMarketPrice,regularMarketChangePercent,currency,shortName`;
+  // ── Method 1: Yahoo Finance via chart endpoint (more reliable) ───────────
+  await Promise.allSettled(stockTickers.map(async (ticker) => {
+    const variants = [ticker]; // try original first
+    if (ticker.includes(":")) variants.push(ticker.split(":")[1]); // FRA:TBK -> TBK
 
-    const r = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Origin": "https://finance.yahoo.com",
-        "Referer": "https://finance.yahoo.com/",
-      },
-      signal: AbortSignal.timeout(12000),
-    });
+    for (const sym of variants) {
+      try {
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
+        const r = await fetch(url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) continue;
+        const data = await r.json();
+        const meta = data?.chart?.result?.[0]?.meta;
+        if (!meta?.regularMarketPrice) continue;
 
-    if (r.ok) {
-      const data = await r.json();
-      const quotes = data?.quoteResponse?.result || [];
-      quotes.forEach(q => {
-        if (q.regularMarketPrice != null) {
-          results[q.symbol] = {
-            price: parseFloat(q.regularMarketPrice.toFixed(4)),
-            currency: q.currency || "USD",
-            change1d: q.regularMarketChangePercent != null
-              ? parseFloat(q.regularMarketChangePercent.toFixed(2))
-              : 0,
-            lastUpdated: new Date().toISOString(),
-            source: "Yahoo Finance",
-          };
-        }
-      });
-      console.log(`Yahoo: got ${Object.keys(results).length}/${stockTickers.length}`);
+        const price = meta.regularMarketPrice;
+        const prev = meta.previousClose || meta.chartPreviousClose || price;
+        results[ticker] = {
+          price: parseFloat(price.toFixed(4)),
+          currency: meta.currency || "USD",
+          change1d: parseFloat(((price - prev) / prev * 100).toFixed(2)),
+          shortName: meta.shortName || meta.longName || sym,
+          lastUpdated: new Date().toISOString(),
+          source: "Yahoo",
+        };
+        break; // found it, stop trying variants
+      } catch {}
     }
-  } catch(e) {
-    console.warn("Yahoo Finance error:", e.message);
-  }
+  }));
 
-  // ── METHOD 2: Fallback via yh-finance alternative endpoint ───────────────
+  // ── Method 2: Stooq for missing (good for European stocks) ───────────────
   const missing = stockTickers.filter(t => !results[t]);
   if (missing.length > 0) {
-    try {
-      for (const ticker of missing.slice(0, 10)) {
-        try {
-          const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`;
-          const r = await fetch(url, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-              "Accept": "application/json",
-            },
-            signal: AbortSignal.timeout(6000),
-          });
-          if (!r.ok) continue;
-          const data = await r.json();
-          const meta = data?.chart?.result?.[0]?.meta;
-          if (meta?.regularMarketPrice) {
-            results[ticker] = {
-              price: parseFloat(meta.regularMarketPrice.toFixed(4)),
-              currency: meta.currency || "USD",
-              change1d: meta.previousClose
-                ? parseFloat(((meta.regularMarketPrice - meta.previousClose) / meta.previousClose * 100).toFixed(2))
-                : 0,
-              lastUpdated: new Date().toISOString(),
-              source: "Yahoo Chart",
-            };
-          }
-        } catch {}
-      }
-    } catch(e) {
-      console.warn("Yahoo Chart fallback error:", e.message);
-    }
+    await Promise.allSettled(missing.map(async (ticker) => {
+      try {
+        // Stooq uses different format: CEZ.PL, MM0.DE etc
+        const stooqMap = {
+          "CEZ": "cez.pl", "MM0": "mm0.de", "FRA:TBK": "tbk.f",
+        };
+        const sym = stooqMap[ticker] || ticker.toLowerCase().replace(":", ".") + ".us";
+        const url = `https://stooq.com/q/d/l/?s=${sym}&i=d`;
+        const r = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0" },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (!r.ok) return;
+        const text = await r.text();
+        const lines = text.trim().split("\n");
+        const lastLine = lines[lines.length - 1];
+        const parts = lastLine.split(",");
+        // Format: Date,Open,High,Low,Close,Volume
+        if (parts.length >= 5 && !isNaN(parseFloat(parts[4]))) {
+          const close = parseFloat(parts[4]);
+          const open = parseFloat(parts[1]);
+          results[ticker] = {
+            price: close,
+            currency: ticker === "CEZ" || ticker === "MM0" ? "CZK" : "EUR",
+            change1d: open > 0 ? parseFloat(((close - open) / open * 100).toFixed(2)) : 0,
+            shortName: ticker,
+            lastUpdated: new Date().toISOString(),
+            source: "Stooq",
+          };
+        }
+      } catch {}
+    }));
   }
 
-  // ── METHOD 3: Alpha Vantage free tier (no key needed for basic) ──────────
-  const stillMissing = stockTickers.filter(t => !results[t]);
-  if (stillMissing.length > 0) {
-    // Use Alpha Vantage if API key is set
-    const avKey = process.env.ALPHA_VANTAGE_KEY;
-    if (avKey) {
-      for (const ticker of stillMissing.slice(0, 5)) {
-        try {
-          const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${ticker}&apikey=${avKey}`;
-          const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-          if (!r.ok) continue;
-          const data = await r.json();
-          const quote = data?.["Global Quote"];
-          if (quote?.["05. price"]) {
-            const price = parseFloat(quote["05. price"]);
-            const prevClose = parseFloat(quote["08. previous close"] || price);
-            results[ticker] = {
-              price: parseFloat(price.toFixed(4)),
-              currency: "USD",
-              change1d: parseFloat(((price - prevClose) / prevClose * 100).toFixed(2)),
-              lastUpdated: new Date().toISOString(),
-              source: "Alpha Vantage",
-            };
-          }
-        } catch {}
-      }
+  // ── Method 3: Fallback hardcoded names for known CZ stocks ───────────────
+  const knownNames = {
+    "CEZ": "ČEZ, a.s.", "MM0": "Moneta Money Bank",
+    "FRA:TBK": "Philip Morris ČR", "RCL": "Royal Caribbean",
+    "IRM": "Iron Mountain", "AHT": "Ashford Hospitality",
+    "UMC": "United Microelectronics", "INTC": "Intel Corporation",
+    "TSLA": "Tesla, Inc.", "AAPL": "Apple Inc.", "MSFT": "Microsoft Corp.",
+    "NVDA": "NVIDIA Corporation", "GOOGL": "Alphabet Inc.",
+    "AMZN": "Amazon.com Inc.", "META": "Meta Platforms",
+    "BRK.B": "Berkshire Hathaway", "JPM": "JPMorgan Chase",
+    "KO": "Coca-Cola Co.", "JNJ": "Johnson & Johnson",
+    "O": "Realty Income Corp.", "SPY": "SPDR S&P 500 ETF",
+    "QQQ": "Invesco QQQ Trust", "VTI": "Vanguard Total Stock",
+    "VWCE": "Vanguard FTSE All-World", "BTC-USD": "Bitcoin",
+    "ETH-USD": "Ethereum",
+  };
+
+  // Add known names to results that have prices but no names
+  stockTickers.forEach(t => {
+    if (results[t] && !results[t].shortName && knownNames[t]) {
+      results[t].shortName = knownNames[t];
     }
-  }
+    // For tickers with no price at all, at least return the name
+    if (!results[t] && knownNames[t]) {
+      results[t] = { price: 0, currency: "USD", change1d: 0, shortName: knownNames[t], lastUpdated: new Date().toISOString(), source: "fallback" };
+    }
+  });
 
   return res.status(200).json({
     prices: results,
-    fetched: Object.keys(results).length,
+    fetched: Object.keys(results).filter(t => results[t].price > 0).length,
     requested: stockTickers.length,
-    missing: stockTickers.filter(t => !results[t]),
+    missing: stockTickers.filter(t => !results[t] || results[t].price === 0),
   });
 }

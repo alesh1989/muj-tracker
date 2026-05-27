@@ -2882,6 +2882,12 @@ export default function App() {
           });
           return updated;
         });
+        // Cache names from price data
+        const newNames = {};
+        Object.entries(data.prices).forEach(([tk, info]) => {
+          if (info.shortName) newNames[tk] = info.shortName;
+        });
+        if (Object.keys(newNames).length) setTickerNames(prev => ({...prev,...newNames}));
         // Cache shortNames from Yahoo Finance
         const newNames = {};
         Object.entries(data.prices).forEach(([tk, info]) => {
@@ -2927,27 +2933,11 @@ export default function App() {
   // ─── TICKER NAME LOOKUP ─────────────────────────────────────────────────
   const [tickerNames, setTickerNames] = useState({}); // cache: AAPL -> "Apple Inc."
 
-  const KNOWN_NAMES = {
-    "CEZ":"ČEZ, a.s.", "MM0":"Moneta Money Bank", "FRA:TBK":"Philip Morris ČR",
-    "INTC":"Intel Corporation", "TSLA":"Tesla, Inc.", "AAPL":"Apple Inc.",
-    "MSFT":"Microsoft Corp.", "NVDA":"NVIDIA Corporation", "GOOGL":"Alphabet Inc.",
-    "AMZN":"Amazon.com Inc.", "META":"Meta Platforms", "KO":"Coca-Cola Co.",
-    "JNJ":"Johnson & Johnson", "O":"Realty Income Corp.", "SPY":"SPDR S&P 500 ETF",
-    "QQQ":"Invesco QQQ Trust", "VTI":"Vanguard Total Stock", "VWCE":"Vanguard FTSE All-World",
-    "UMC":"United Microelectronics", "RCL":"Royal Caribbean", "IRM":"Iron Mountain",
-    "DAL":"Delta Air Lines", "AHT":"Ashford Hospitality Trust",
-    "BTC":"Bitcoin", "ETH":"Ethereum", "BTC-USD":"Bitcoin", "ETH-USD":"Ethereum",
-  };
-
   const lookupTickerName = useCallback(async (ticker) => {
-    const tk = ticker.toUpperCase().trim();
-    if (!tk || tickerNames[tk]) return;
-    // 1. Hardcoded known names (instant)
-    if (KNOWN_NAMES[tk]) {
-      setTickerNames(prev => ({ ...prev, [tk]: KNOWN_NAMES[tk] }));
-    }
-    // 2. Try API for name (async, may update later)
+    const tk = ticker.toUpperCase();
+    if (!tk || tk.length < 1 || tickerNames[tk]) return;
     try {
+      // Try prices API first (has shortName from Yahoo)
       const res = await fetch("/api/prices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2955,11 +2945,11 @@ export default function App() {
       });
       const data = await res.json();
       const info = data.prices?.[tk];
-      if (info?.shortName && info.shortName !== tk) {
+      if (info?.shortName) {
         setTickerNames(prev => ({ ...prev, [tk]: info.shortName }));
         return;
       }
-      // 3. Fallback: chart API
+      // Fallback: chart API also returns shortName
       const res2 = await fetch(`/api/chart?ticker=${encodeURIComponent(tk)}&range=1d`);
       const data2 = await res2.json();
       if (data2?.shortName && data2.shortName !== tk) {
