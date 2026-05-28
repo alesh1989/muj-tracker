@@ -3392,6 +3392,40 @@ export default function App() {
     }
   }, [prices]);
 
+  // Keyboard shortcut: N = new transaction, Escape = close modals
+  useEffect(() => {
+    const handler = (e) => {
+      const tag = e.target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "n" || e.key === "N") { e.preventDefault(); setShowAddTx(true); }
+      if (e.key === "Escape") {
+        setShowAddTx(false);
+        setEditTx(null);
+        setShowCsvImport(false);
+        setShowDeleteAll(false);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  // Keyboard shortcut: N = new transaction, Escape = close modals
+  useEffect(() => {
+    const handler = (e) => {
+      const tag = e.target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "n" || e.key === "N") { e.preventDefault(); setShowAddTx(true); }
+      if (e.key === "Escape") {
+        setShowAddTx(false);
+        setEditTx(null);
+        setShowCsvImport(false);
+        setShowDeleteAll(false);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   // Auto-fetch prices for portfolio tickers every 15 minutes
   useEffect(() => {
     if (!loaded) return;
@@ -3627,7 +3661,7 @@ export default function App() {
   }, [activeTransactions]);
 
   // ─── ADD TX STATE ───────────────────────────────────────────────────────
-  const [newTx, setNewTx] = useState({ type:"buy", ticker:"", name:"", category:"stock", date:new Date().toISOString().slice(0,10), quantity:"", price:"", currency:"CZK", fee:"", dividendAmount:"", dividendPerShare:"", divTax:"15", amount:"", notes:"" });
+  const [newTx, setNewTx] = useState({ type:"buy", ticker:"", name:"", category:"stock", date:new Date().toISOString().slice(0,10), quantity:"", price:"", currency:"USD", fee:"", dividendAmount:"", dividendPerShare:"", divTax:"15", amount:"", notes:"" });
 
   const addTransaction = () => {
     const isFlow = newTx.type === "deposit" || newTx.type === "withdraw";
@@ -4457,7 +4491,7 @@ export default function App() {
                               </td>
                               <td style={S.td}>{isDepWith||t.type==="dividend"?"–":t.quantity}</td>
                               <td style={S.td}>
-                                {t.type==="dividend"?fmt(t.dividendAmount,t.currency,2):isDepWith?fmt(t.amount||0,t.currency,0):`${t.price} ${t.currency}`}
+                                {t.type==="dividend"?fmt(getDivCZK(t),"CZK",0)+" CZK":isDepWith?fmt(t.amount||0,t.currency,0):`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency}`}
                               </td>
                               <td style={S.td}>{t.fee?`${t.fee} ${t.currency}`:"–"}</td>
                               <td style={{...S.td,fontWeight:600,color:t.type==="sell"||t.type==="withdraw"?"#f87171":"#22d3a0"}}>{fmt(totalCZK,"CZK",0)}</td>
