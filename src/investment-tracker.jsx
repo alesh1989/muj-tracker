@@ -3541,7 +3541,8 @@ export default function App() {
       const testedValueCZK = toCZK(testedQty * currentPrice, currentCurrency, rates); // currentCurrency already CZK-aware
       const earliestLot = h.lots.length > 0 ? h.lots.reduce((a, b) => a.date < b.date ? a : b) : null;
       const daysHeld = earliestLot ? daysSince(earliestLot.date) : 0;
-      const daysToTest = earliestLot ? Math.max(0, 1095 - daysSince(earliestLot.date)) : 0;
+      const testDays = h.category === "real_estate" ? 3650 : 1095; // 10 years for real estate, 3 years for others
+      const daysToTest = earliestLot ? Math.max(0, testDays - daysSince(earliestLot.date)) : 0;
       const years = daysHeld / 365;
       const annualizedReturn = years > 0.1 && h.totalCostCZK > 0 ? (Math.pow(currentValueCZK / h.totalCostCZK, 1/years) - 1) * 100 : 0;
 
@@ -3949,63 +3950,68 @@ export default function App() {
                   });
                   const total = Object.values(cats).reduce((s,v)=>s+v,0)||1;
                   const entries = Object.entries(cats).filter(([,v])=>v>0);
-                  const rad=72,cx=95,cy=90,tw=230,th=180;
+                  const rad=80,cx=120,cy=95,tw=240,th=190;
                   let angle=-Math.PI/2;
                   const slices = entries.map(([cat,val])=>{
                     const slice=val/total*Math.PI*2;
                     const x1=cx+rad*Math.cos(angle),y1=cy+rad*Math.sin(angle);
                     angle+=slice;
                     const x2=cx+rad*Math.cos(angle),y2=cy+rad*Math.sin(angle);
-                    const midA=angle-slice/2;
-                    return {cat,val,slice,x1,y1,x2,y2,large:slice>Math.PI?1:0,
-                      midX:cx+(rad+10)*Math.cos(midA), midY:cy+(rad+10)*Math.sin(midA)};
+                    return {cat,val,slice,x1,y1,x2,y2,large:slice>Math.PI?1:0};
                   });
                   return (
-                    <div style={{position:"relative"}}>
+                    <div>
+                      {/* Tooltip on hover */}
                       {hovCat && (
-                        <div style={{position:"absolute",top:4,left:0,right:0,textAlign:"center",
-                          fontSize:11,fontWeight:700,color:catColor[hovCat.cat]||accent,
-                          background:bgCard,borderRadius:8,padding:"4px 8px",zIndex:10,
-                          border:`1px solid ${catColor[hovCat.cat]||border}44`}}>
+                        <div style={{fontSize:11,fontWeight:700,color:catColor[hovCat.cat]||accent,
+                          background:bgCard,borderRadius:8,padding:"4px 10px",marginBottom:6,
+                          border:`1px solid ${catColor[hovCat.cat]||border}55`,textAlign:"center"}}>
                           {catLabel[hovCat.cat]||hovCat.cat}: {fmt(hovCat.val,"CZK",0)} · {(hovCat.val/total*100).toFixed(1)}%
                         </div>
                       )}
                       <svg viewBox={`0 0 ${tw} ${th}`} style={{width:"100%",height:"auto"}}
                         onMouseLeave={()=>setHovCat(null)}>
-                        <text x={cx} y={cy-6} textAnchor="middle" fill={textPrimary} fontSize="10" fontWeight="700">
-                          {lang==="en"?"ALLOCATION":"ALOKACE"}
-                        </text>
-                        <text x={cx} y={cy+9} textAnchor="middle" fill={textMuted} fontSize="9">
-                          {portfolio.positions.length} {lang==="en"?"positions":"pozic"}
-                        </text>
+                        {/* Donut slices */}
                         {slices.map(s=>{
                           const isHov = hovCat?.cat===s.cat;
-                          const r2 = isHov ? rad+4 : rad;
-                          const innerR = rad*0.54;
+                          const r = isHov ? rad+5 : rad;
                           const color=catColor[s.cat]||"#64748b";
-                          const x1=cx+r2*Math.cos(angle-(s.slice)), y1=cy+r2*Math.sin(angle-(s.slice));
-                          // Recompute with hover radius
-                          let a=-Math.PI/2;
-                          slices.forEach(sl=>{ if(sl.cat===s.cat) return; a+=sl.slice; });
                           return (
                             <path key={s.cat}
-                              d={`M${cx},${cy} L${s.x1},${s.y1} A${isHov?rad+4:rad},${isHov?rad+4:rad} 0 ${s.large},1 ${s.x2},${s.y2} Z`}
-                              fill={color} opacity={isHov?1:0.82}
-                              style={{cursor:"pointer",transition:"opacity 0.15s"}}
+                              d={`M${cx},${cy} L${s.x1},${s.y1} A${r},${r} 0 ${s.large},1 ${s.x2},${s.y2} Z`}
+                              fill={color} opacity={isHov?1:0.85}
+                              style={{cursor:"pointer",transition:"all 0.12s"}}
                               onMouseEnter={()=>setHovCat(s)}>
                               <title>{catLabel[s.cat]||s.cat}: {(s.val/total*100).toFixed(1)}%</title>
                             </path>
                           );
                         })}
-                        <circle cx={cx} cy={cy} r={rad*0.54} fill={bgCard}/>
-                        {entries.map(([cat,val],i)=>(
-                          <g key={cat}>
-                            <rect x={tw-85} y={24+i*24-6} width={10} height={10} rx={2} fill={catColor[cat]||"#64748b"}/>
-                            <text x={tw-72} y={24+i*24+3} fill={textPrimary} fontSize="10" fontWeight="600">{catLabel[cat]||cat}</text>
-                            <text x={tw-2} y={24+i*24+3} textAnchor="end" fill={catColor[cat]||textMuted} fontSize="10" fontWeight="700">{(val/total*100).toFixed(1)}%</text>
-                          </g>
-                        ))}
+                        {/* Center hole */}
+                        <circle cx={cx} cy={cy} r={rad*0.52} fill={bgCard}/>
+                        {/* Center labels */}
+                        <text x={cx} y={cy-5} textAnchor="middle" fill={textPrimary} fontSize="9" fontWeight="700">
+                          {lang==="en"?"ALLOC":"ALOKACE"}
+                        </text>
+                        <text x={cx} y={cy+9} textAnchor="middle" fill={textMuted} fontSize="8">
+                          {portfolio.positions.length} {lang==="en"?"pos.":"poz."}
+                        </text>
                       </svg>
+                      {/* Legend below chart — 2 columns */}
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px",marginTop:4}}>
+                        {entries.map(([cat,val])=>(
+                          <div key={cat} style={{display:"flex",alignItems:"center",gap:6,
+                            cursor:"pointer",padding:"2px 4px",borderRadius:4,
+                            background:hovCat?.cat===cat?catColor[cat]+"22":"transparent"}}
+                            onMouseEnter={()=>setHovCat({cat,val})}
+                            onMouseLeave={()=>setHovCat(null)}>
+                            <div style={{width:10,height:10,borderRadius:2,background:catColor[cat]||"#64748b",flexShrink:0}}/>
+                            <span style={{fontSize:10,color:textPrimary,fontWeight:600}}>{catLabel[cat]||cat}</span>
+                            <span style={{fontSize:10,color:catColor[cat]||textMuted,fontWeight:700,marginLeft:"auto"}}>
+                              {(val/total*100).toFixed(1)}%
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   );
                 })()}
@@ -4773,7 +4779,10 @@ export default function App() {
                 const daysHeld = oldestBuyDate
                   ? Math.floor((new Date(sell.date)-new Date(oldestBuyDate))/86400000) : 0;
                 // Časový test: 3+ roky = osvobozeno
-                const timeExempt = daysHeld >= 1095;
+                // Real estate: 10 year time test; other assets: 3 years
+                const sellTx = activeTransactions.find(t=>t.type==="sell"&&t.ticker===sell.ticker);
+                const isRealEstate = activeTransactions.filter(b=>b.type==="buy"&&b.ticker===sell.ticker).some(b=>b.category==="real_estate");
+                const timeExempt = isRealEstate ? daysHeld >= 3650 : daysHeld >= 1095;
                 return {
                   ticker:sell.ticker, date:sell.date, qty:sell.quantity,
                   revenueCZK, costCZK, gainCZK, daysHeld,
@@ -5092,7 +5101,7 @@ export default function App() {
             <div style={{fontSize:15,fontWeight:700,marginBottom:16,color:textPrimary}}>+ {lang==="en"?"Add Transaction":"Přidat transakci"}</div>
             {[
               {label:lang==="en"?"Type":"Typ",key:"type",type:"select",opts:[["buy",lang==="en"?"Buy":"Nákup"],["sell",lang==="en"?"Sell":"Prodej"],["dividend",lang==="en"?"Dividend":"Dividenda"],["deposit",lang==="en"?"Deposit":"Vklad"],["withdraw",lang==="en"?"Withdrawal":"Výběr"]],onChange:(v)=>{ if(v==="deposit"||v==="withdraw") setNewTx(p=>({...p,type:v,category:"cash",ticker:"",name:""})); else setNewTx(p=>({...p,type:v,category:p.category==="cash"?"stock":p.category})); }},
-              {label:lang==="en"?"Category":"Kategorie",key:"category",type:"select",opts:[["stock",lang==="en"?"Stock":"Akcie"],["etf","ETF"],["crypto","Crypto"],["real_estate",lang==="en"?"Real Estate":"Nemovitosti"],["cash",lang==="en"?"Cash":"Hotovost"]]},
+              {label:lang==="en"?"Category":"Kategorie",key:"category",type:"select",opts:[["stock",lang==="en"?"Stock":"Akcie"],["etf","ETF"],["crypto","Crypto"],["real_estate",lang==="en"?"Real Estate":"Nemovitosti"],["cash",lang==="en"?"Cash":"Hotovost"]],onChange:(v)=>{ if(v==="crypto") setNewTx(p=>({...p,category:"crypto",ticker:p.ticker||"BTC-USD",name:p.name||"Bitcoin",currency:"USD"})); else if(v==="real_estate") setNewTx(p=>({...p,category:"real_estate",currency:"CZK"})); else setNewTx(p=>({...p,category:v})); }},
               {label:"Ticker",key:"ticker",type:"text",placeholder:"AAPL"},
               {label:`${lang==="en"?"Name":"Název"} ${tickerNames[newTx.ticker?.toUpperCase()]?"(auto: "+tickerNames[newTx.ticker?.toUpperCase()]+")":""}`,key:"name",type:"text",placeholder:"Apple Inc."},
               {label:lang==="en"?"Date":"Datum",key:"date",type:"date"},
@@ -5163,6 +5172,13 @@ export default function App() {
                   const qty=parseFloat(newTx.quantity)||hq||1;
                   divAmount=toCZK(perShare*qty*(1-tax/100),newTx.currency,rates);
                 }
+                // Check for duplicate
+                const isDup = activeTransactions.some(t =>
+                  t.type===newTx.type && t.ticker===newTx.ticker &&
+                  t.date===newTx.date && Math.abs((parseFloat(t.quantity)||0)-(parseFloat(newTx.quantity)||0))<0.001 &&
+                  Math.abs((parseFloat(t.price)||0)-(parseFloat(newTx.price)||0))<0.001
+                );
+                if (isDup && !window.confirm("⚠ Zdá se, že tato transakce již existuje (stejný typ, ticker, datum, množství a cena). Opravdu přidat?")) return;
                 const tx={id:Date.now().toString(),portfolioId:activePortfolioId,...newTx,
                   quantity:parseFloat(newTx.quantity)||0,price:parseFloat(newTx.price)||0,
                   fee:parseFloat(newTx.fee)||0,dividendAmount:divAmount,
