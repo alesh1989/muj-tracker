@@ -175,133 +175,205 @@ const BarChart = ({ data }) => {
 
 // ─── GROWTH CHART (from first transaction → now) ──────────────────────────────
 const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, activeBenchmarks=[], benchmarkOptions=[], portfolioCurrentCZK=0 }) => {
-  const buys = transactions.filter(t => t.type === "buy").sort((a,b) => new Date(a.date)-new Date(b.date));
+  const [tooltip, setTooltip] = useState(null);
+  const svgRef = useRef(null);
+
+  const allTx = transactions.filter(t => ["buy","sell","deposit","withdraw"].includes(t.type))
+    .sort((a,b) => new Date(a.date)-new Date(b.date));
+  const buys = allTx.filter(t => t.type === "buy");
   if (!buys.length) return <div style={{color:"#8b9fc0",fontSize:12}}>Žádné transakce</div>;
 
   const firstDate = new Date(buys[0].date);
   const now = new Date();
 
+  // Build monthly points: invested = cumulative cost basis (buy - sell proceeds)
+  // current = invested (we only have live prices, not historical)
+  // We show "invested" accurately, and "current" only for the last point (live prices)
   const points = [];
   let cursor = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
   while (cursor <= now) {
     if (!yearFilter || cursor.getFullYear() === yearFilter) {
       const txSoFar = buys.filter(t => new Date(t.date) <= cursor);
+      const sellsSoFar = transactions.filter(t => t.type==="sell" && new Date(t.date) <= cursor);
+      // Cost basis = money spent on buys
       let invested = 0;
-      const holdings = {};
-      txSoFar.forEach(t => {
-        invested += toCZK(t.quantity*t.price + (t.fee||0), t.currency, rates);
-        holdings[t.ticker] = (holdings[t.ticker]||0) + t.quantity;
-      });
-      // For current month: use live prices. For historical: use invested cost as proxy
-      const isCurrentMonth = cursor.getFullYear()===now.getFullYear() && cursor.getMonth()===now.getMonth();
-      let current = 0;
-      if (isCurrentMonth) {
-        // Use actual current prices
-        Object.entries(holdings).forEach(([ticker, qty]) => {
-          const p = prices[ticker];
-          if (p) current += toCZK(qty*p.price, getTickerCurrency(ticker,p), rates);
-        });
-      } else {
-        // For past months: estimate value as invested × (current_value/total_invested ratio)
-        // This gives a proportional estimate without needing historical prices
-        current = invested; // will be scaled after all points computed
-      }
-      points.push({ label:`${cursor.getMonth()+1}/${String(cursor.getFullYear()).slice(2)}`, invested, current, date:new Date(cursor) });
+      txSoFar.forEach(t => { invested += toCZK(t.quantity*t.price + (t.fee||0), t.currency, rates); });
+      // Subtract sell proceeds (reduces cost basis)
+      sellsSoFar.forEach(t => { invested -= toCZK(t.quantity*t.price - (t.fee||0), t.currency, rates); });
+      invested = Math.max(0, invested);
+      points.push({ label:`${cursor.getMonth()+1}/${String(cursor.getFullYear()).slice(2)}`, invested, current: invested, date:new Date(cursor) });
     }
     cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
   }
-  // Use actual portfolio value from parent for last point
-  const totalInvestedAll = points.length > 0 ? points[points.length-1].invested : 0;
-  const actualCurrentVal = portfolioCurrentCZK > 0 ? portfolioCurrentCZK : (points[points.length-1]?.current || 0);
-  const ratio = totalInvestedAll > 0 && actualCurrentVal > 0 ? actualCurrentVal / totalInvestedAll : 1;
-  if (points.length > 1) {
-    points.forEach((pt, i) => {
-      // Scale each point: historical value ∝ amount invested × current ratio
-      pt.current = pt.invested * ratio;
-    });
-    // Set last point to exact current value
-    points[points.length-1].current = actualCurrentVal;
-  }
 
-  if (points.length < 2) return <div style={{color:"#8b9fc0",fontSize:12,padding:20}}>Nedostatek dat pro zvolený rok</div>;
+  if (points.length < 2) return <div style={{color:"#8b9fc0",fontSize:12,padding:20}}>Nedostatek dat</div>;
 
-  // Compute benchmark normalized values
+  // Last point = live portfolio value
+  const lastPt = points[points.length-1];
+  const liveValue = portfolioCurrentCZK > 0 ? portfolioCurrentCZK : lastPt.invested;
+  lastPt.current = liveValue;
+
+  // Benchmark: simulate buying same CZK amount of benchmark on same dates as portfolio buys
+  // This gives a fair "what if I bought SPY instead" comparison
   const benchmarkSeries = benchmarkOptions
     .filter(b => activeBenchmarks.includes(b.id) && benchmarks[b.id]?.length)
     .map(b => {
-      const bData = benchmarks[b.id];
+      const bData = benchmarks[b.id]; // [{t, c}] monthly candles
+      if (!bData.length) return null;
+
+      // For each buy transaction, find benchmark price at that date and simulate buying
+      // benchmark units worth the same CZK amount
+      let benchUnits = 0;
+      let benchCost = 0;
+      buys.forEach(tx => {
+        const txDate = new Date(tx.date);
+        // Find closest benchmark candle on or before tx date
+        const candle = [...bData].reverse().find(c => new Date(c.t) <= txDate);
+        if (candle && candle.c > 0) {
+          const czk = toCZK(tx.quantity*tx.price+(tx.fee||0), tx.currency, rates);
+          // Convert CZK to benchmark currency (USD) using approximate rate
+          const usdCzk = rates.USD_CZK || 23.2;
+          const usdAmt = czk / usdCzk;
+          benchUnits += usdAmt / candle.c;
+          benchCost += czk;
+        }
+      });
+
+      if (benchUnits === 0) return null;
+
+      // Current benchmark value: benchUnits × current price
+      const latestCandle = bData[bData.length-1];
+      const currentBenchUSD = benchUnits * latestCandle.c;
+      const currentBenchCZK = currentBenchUSD * (rates.USD_CZK || 23.2);
+
+      // Build benchmark series: for each month, find benchmark price and compute value
       const startDate = points[0].date;
-      const endDate = points[points.length-1].date;
-      const filtered = bData.filter(c => new Date(c.t) >= startDate && new Date(c.t) <= endDate);
-      if (filtered.length < 2) return null;
-      const basePrice = filtered[0].c;
-      const portStart = points.find(p => p.current > 0)?.current || points[0].current || 1;
-      return { ...b, pts: filtered.map(c => ({
-        ratio: c.c / basePrice,
-        ts: new Date(c.t),
-      })), portStart, startDate, endDate };
+      const bPts = points.map(pt => {
+        const candle = [...bData].reverse().find(c => new Date(c.t) <= pt.date);
+        if (!candle) return null;
+        // Bench units bought up to this date
+        let units = 0;
+        buys.filter(tx => new Date(tx.date) <= pt.date).forEach(tx => {
+          const txDate = new Date(tx.date);
+          const c = [...bData].reverse().find(cc => new Date(cc.t) <= txDate);
+          if (c && c.c > 0) {
+            const czk = toCZK(tx.quantity*tx.price+(tx.fee||0), tx.currency, rates);
+            units += (czk / (rates.USD_CZK||23.2)) / c.c;
+          }
+        });
+        const val = units * candle.c * (rates.USD_CZK||23.2);
+        return { date: pt.date, val };
+      }).filter(Boolean);
+
+      return { ...b, pts: bPts, finalValue: currentBenchCZK, costBasis: benchCost };
     }).filter(Boolean);
 
-  // Max value including benchmarks
+  // Max value
   const maxVal = Math.max(
     ...points.map(v => Math.max(v.invested, v.current)),
-    ...benchmarkSeries.flatMap(b => b.pts.map(p => b.portStart * p.ratio)),
+    ...benchmarkSeries.flatMap(b => b.pts.map(p => p.val)),
     1
   );
 
-  const w = 580, h = 180, pad = {t:10, b:28, l:66, r:10};
-  const iW = w-pad.l-pad.r, iH = h-pad.t-pad.b;
+  const W = 580, H = 190, pad = {t:12, b:30, l:72, r:12};
+  const iW = W-pad.l-pad.r, iH = H-pad.t-pad.b;
   const xS = i => pad.l + (i/(points.length-1||1))*iW;
-  const yS = v => pad.t + iH - (v/maxVal)*iH;
-  const iPath = points.map((v,i)=>`${i===0?"M":"L"}${xS(i)},${yS(v.invested)}`).join(" ");
-  const cPath = points.map((v,i)=>`${i===0?"M":"L"}${xS(i)},${yS(v.current)}`).join(" ");
+  const yS = v => pad.t + iH - Math.min(1,(v/maxVal))*iH;
+  const iPath = points.map((v,i)=>`${i===0?"M":"L"}${xS(i).toFixed(1)},${yS(v.invested).toFixed(1)}`).join(" ");
+  const cPath = points.map((v,i)=>`${i===0?"M":"L"}${xS(i).toFixed(1)},${yS(v.current).toFixed(1)}`).join(" ");
   const aPath = cPath + ` L${xS(points.length-1)},${yS(0)} L${xS(0)},${yS(0)} Z`;
   const step = Math.max(1, Math.floor(points.length/8));
+  const fmtK = v => v >= 1e6 ? (v/1e6).toFixed(2)+" M" : v >= 1e3 ? (v/1e3).toFixed(0)+"k" : v.toFixed(0);
+  const fmtKč = v => v >= 1e6 ? (v/1e6).toFixed(2)+" M Kč" : v >= 1e3 ? (v/1e3).toFixed(0)+"k Kč" : v.toFixed(0)+" Kč";
 
-  const fmtK = v => v >= 1e6 ? (v/1e6).toFixed(1)+"M" : v >= 1e3 ? (v/1e3).toFixed(0)+"k" : v.toFixed(0);
+  // Gain/loss stats
+  const gainCZK = liveValue - lastPt.invested;
+  const gainPct = lastPt.invested > 0 ? (gainCZK/lastPt.invested*100) : 0;
+
+  const handleSvgMove = (e) => {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const idx = Math.max(0, Math.min(points.length-1, Math.round((mx - pad.l) / iW * (points.length-1))));
+    const pt = points[idx];
+    const bVals = benchmarkSeries.map(b => ({ label:b.label, color:b.color, val: b.pts[idx]?.val }));
+    setTooltip({ x: xS(idx), idx, pt, bVals });
+  };
 
   return (
-    <div style={{overflowX:"auto"}}>
-      <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",minWidth:300,height:"auto"}}>
-        <defs>
-          <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#6366f1" stopOpacity="0.25"/>
-            <stop offset="100%" stopColor="#6366f1" stopOpacity="0"/>
-          </linearGradient>
-        </defs>
-        {[0,0.25,0.5,0.75,1].map(t=>(
-          <g key={t}>
-            <line x1={pad.l} y1={pad.t+iH*t} x2={w-pad.r} y2={pad.t+iH*t} stroke="#1e293b" strokeWidth="1"/>
-            <text x={pad.l-4} y={pad.t+iH*t+4} textAnchor="end" fill="#8b9fc0" fontSize="8">{fmtK(maxVal*(1-t))}</text>
-          </g>
-        ))}
-        {points.map((v,i) => i%step===0 && (
-          <text key={i} x={xS(i)} y={h-4} textAnchor="middle" fill="#8b9fc0" fontSize="8">{v.label}</text>
-        ))}
-        <path d={aPath} fill="url(#ag)"/>
-        <path d={iPath} fill="none" stroke="#334155" strokeWidth="1.5" strokeDasharray="4,3"/>
-        <path d={cPath} fill="none" stroke="#6366f1" strokeWidth="2"/>
-        <circle cx={xS(points.length-1)} cy={yS(points[points.length-1].current)} r="3" fill="#6366f1"/>
-        {/* Benchmark lines */}
-        {benchmarkSeries.map(b => {
-          const startDate = b.startDate;
-          const endDate = b.endDate;
-          const totalMs = endDate - startDate || 1;
-          const bPath = b.pts.map((p,i) => {
-            const xPct = (p.ts - startDate) / totalMs;
-            const bx = pad.l + xPct * iW;
-            const by = yS(b.portStart * p.ratio);
-            return `${i===0?"M":"L"}${bx},${by}`;
-          }).join(" ");
-          return <path key={b.id} d={bPath} fill="none" stroke={b.color} strokeWidth="1.8" opacity={0.9} strokeDasharray="6,2"/>;
-        })}
-      </svg>
-      <div style={{display:"flex",gap:14,marginTop:6,fontSize:10,color:"#94a3b8",flexWrap:"wrap"}}>
-        <span><span style={{color:"#6366f1"}}>──</span> Portfolio</span>
-        <span><span style={{color:"#334155"}}>- -</span> Investováno</span>
+    <div>
+      {/* Stats row */}
+      <div style={{display:"flex",gap:16,marginBottom:10,flexWrap:"wrap"}}>
+        <div style={{fontSize:11,color:"#8b9fc0"}}>Investováno: <b style={{color:"#e2e8f0"}}>{fmtKč(lastPt.invested)}</b></div>
+        <div style={{fontSize:11,color:"#8b9fc0"}}>Hodnota: <b style={{color:"#6366f1"}}>{fmtKč(liveValue)}</b></div>
+        <div style={{fontSize:11,color:"#8b9fc0"}}>Zisk: <b style={{color:gainCZK>=0?"#10b981":"#f87171"}}>{gainCZK>=0?"+":""}{fmtKč(gainCZK)} ({gainPct>=0?"+":""}{gainPct.toFixed(1)}%)</b></div>
         {benchmarkSeries.map(b=>(
-          <span key={b.id}><span style={{color:b.color}}>- -</span> {b.label}</span>
+          <div key={b.id} style={{fontSize:11,color:"#8b9fc0"}}>{b.label}: <b style={{color:b.color}}>{fmtKč(b.finalValue)} ({b.costBasis>0?(((b.finalValue-b.costBasis)/b.costBasis*100)>=0?"+":"")+(((b.finalValue-b.costBasis)/b.costBasis*100)).toFixed(1)+"%":"–"})</b></div>
         ))}
+      </div>
+      <div style={{overflowX:"auto",position:"relative"}}>
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{width:"100%",minWidth:300,height:"auto",cursor:"crosshair"}}
+          onMouseMove={handleSvgMove} onMouseLeave={()=>setTooltip(null)}>
+          <defs>
+            <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#6366f1" stopOpacity="0.3"/>
+              <stop offset="100%" stopColor="#6366f1" stopOpacity="0.02"/>
+            </linearGradient>
+          </defs>
+          {[0,0.25,0.5,0.75,1].map(t=>(
+            <g key={t}>
+              <line x1={pad.l} y1={pad.t+iH*t} x2={W-pad.r} y2={pad.t+iH*t} stroke="#1e293b" strokeWidth="1"/>
+              <text x={pad.l-5} y={pad.t+iH*t+4} textAnchor="end" fill="#475569" fontSize="9">{fmtK(maxVal*(1-t))}</text>
+            </g>
+          ))}
+          {points.map((v,i) => i%step===0 && (
+            <text key={i} x={xS(i)} y={H-6} textAnchor="middle" fill="#475569" fontSize="9">{v.label}</text>
+          ))}
+          {/* Benchmark lines */}
+          {benchmarkSeries.map(b => {
+            const bPath = b.pts.map((p,i)=>`${i===0?"M":"L"}${xS(i).toFixed(1)},${yS(p.val).toFixed(1)}`).join(" ");
+            return <path key={b.id} d={bPath} fill="none" stroke={b.color} strokeWidth="1.8" opacity={0.85} strokeDasharray="5,3"/>;
+          })}
+          <path d={aPath} fill="url(#ag)"/>
+          <path d={iPath} fill="none" stroke="#334155" strokeWidth="1.5" strokeDasharray="4,3"/>
+          <path d={cPath} fill="none" stroke="#6366f1" strokeWidth="2.5"/>
+          <circle cx={xS(points.length-1)} cy={yS(points[points.length-1].current)} r="4" fill="#6366f1"/>
+          {/* Hover crosshair */}
+          {tooltip && (
+            <>
+              <line x1={tooltip.x} y1={pad.t} x2={tooltip.x} y2={H-pad.b} stroke="#ffffff" strokeWidth="1" strokeDasharray="2,3" opacity="0.25"/>
+              <circle cx={tooltip.x} cy={yS(tooltip.pt.current)} r="4" fill="#6366f1" stroke="#fff" strokeWidth="1.5"/>
+              {tooltip.bVals.map((b,i) => b.val && (
+                <circle key={i} cx={tooltip.x} cy={yS(b.val)} r="3.5" fill={b.color} stroke="#fff" strokeWidth="1.5"/>
+              ))}
+            </>
+          )}
+          {/* Axes */}
+          <line x1={pad.l} y1={pad.t} x2={pad.l} y2={H-pad.b} stroke="#334155" strokeWidth="1"/>
+          <line x1={pad.l} y1={H-pad.b} x2={W-pad.r} y2={H-pad.b} stroke="#334155" strokeWidth="1"/>
+        </svg>
+      </div>
+      {/* Tooltip */}
+      {tooltip && (
+        <div style={{marginTop:8,padding:"8px 12px",background:"#0f1a2e",border:"1px solid #1e3a5f",borderRadius:8,fontSize:11}}>
+          <b style={{color:"#e2e8f0"}}>{tooltip.pt.date.toLocaleDateString("cs-CZ",{month:"short",year:"numeric"})}</b>
+          <div style={{marginTop:4,display:"flex",gap:12,flexWrap:"wrap"}}>
+            <span style={{color:"#64748b"}}>Investováno: <b style={{color:"#94a3b8"}}>{fmtKč(tooltip.pt.invested)}</b></span>
+            <span style={{color:"#64748b"}}>Portfolio: <b style={{color:"#818cf8"}}>{fmtKč(tooltip.pt.current)}</b></span>
+            {tooltip.bVals.map((b,i) => b.val && (
+              <span key={i} style={{color:"#64748b"}}>{b.label}: <b style={{color:b.color}}>{fmtKč(b.val)}</b></span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{display:"flex",gap:14,marginTop:8,fontSize:10,color:"#64748b",flexWrap:"wrap"}}>
+        <span><span style={{color:"#6366f1",fontWeight:700}}>──</span> Portfolio (hodnota)</span>
+        <span><span style={{color:"#334155",fontWeight:700}}>╌╌</span> Investováno (cost basis)</span>
+        {benchmarkSeries.map(b=>(
+          <span key={b.id}><span style={{color:b.color,fontWeight:700}}>╌╌</span> {b.label} (stejné cash flow)</span>
+        ))}
+        <span style={{color:"#475569",fontStyle:"italic"}}>Benchmark = kolik byste měli kdybych místo akcií koupil index</span>
       </div>
     </div>
   );
