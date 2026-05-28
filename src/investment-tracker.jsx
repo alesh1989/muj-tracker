@@ -4784,19 +4784,21 @@ export default function App() {
 
               // Dividendy
               const divs = yearTx.filter(t=>t.type==="dividend");
-              // divNet = čistá dividenda v CZK (vždy správně uložená)
-              const divNet = divs.reduce((s,t)=>s+((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),0);
-              // divGross = hrubá: pokud máme dividendPerShare, použij; jinak zpětně dopočítej z daně
-              const divGross = divs.reduce((s,t)=>{
-                const net = (t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates);
-                const tax = parseFloat(t.divTax||t.tax||15)/100;
-                const perShare = t.dividendPerShare||0;
-                const qty = t.quantity||0;
-                // Prefer perShare*qty if available, else back-calculate from net/(1-tax)
-                const gross = perShare&&qty ? toCZK(perShare*qty, t.currency||"CZK", rates)
-                                           : (tax<1 ? net/(1-tax) : net);
-                return s + gross;
-              },0);
+              // Helper: get CZK value of dividend
+              const getDivNetCZK = (t) => (t.dividendCZK||(t.currency||"USD")==="CZK")
+                ? (t.dividendAmount||0)
+                : toCZK(t.dividendAmount||0, t.currency||"USD", rates);
+              // Helper: get gross CZK value (before tax)
+              const getDivGrossCZK = (t) => {
+                const net = getDivNetCZK(t);
+                const tax = (parseFloat(t.divTax)||15)/100;
+                if (t.dividendPerShare && (t.quantity||0)>0)
+                  return toCZK(t.dividendPerShare*(t.quantity||0), t.currency||"CZK", rates);
+                // back-calculate: net = gross*(1-tax) → gross = net/(1-tax)
+                return tax>0 && tax<1 ? net/(1-tax) : net;
+              };
+              const divNet = divs.reduce((s,t)=>s+getDivNetCZK(t), 0);
+              const divGross = divs.reduce((s,t)=>s+getDivGrossCZK(t), 0);
               const divTaxPaid = divGross - divNet;
 
               // ── Prodeje — §10 ZDP ──────────────────────────────────────────────────
@@ -4912,11 +4914,8 @@ export default function App() {
                         </tr></thead>
                         <tbody>
                           {divs.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>{
-                            const net = ((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates));
-                            const tax = parseFloat(t.divTax||15)/100;
-                            const gross = t.dividendPerShare&&t.quantity
-                              ? toCZK(t.dividendPerShare*t.quantity, t.currency||"CZK", rates)
-                              : (tax<1 ? net/(1-tax) : net);
+                            const net = getDivNetCZK(t);
+                            const gross = getDivGrossCZK(t);
                             const taxAmt = gross - net;
                             return (
                               <tr key={t.id}>
