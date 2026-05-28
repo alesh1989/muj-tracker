@@ -978,7 +978,7 @@ function CsvImportModal({ onClose, onImport, S }) {
 
   const typeColor = { buy:"#10b981", sell:"#ef4444", dividend:"#8b5cf6" };
   const typeLabel = { buy:"Nákup", sell:"Prodej", dividend:"Dividenda" };
-  const catColor2 = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b" };
+  const catColor2 = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b", real_estate:"#f97316", cash:"#22d3a0" };
   const selectedCount = Object.values(selected).filter(Boolean).length;
 
   return (
@@ -3941,7 +3941,11 @@ export default function App() {
                 <div style={S.sectionTitle}>Alokace</div>
                 {(() => {
                   const cats = {};
-                  portfolio.positions.forEach(p => { cats[p.category]=(cats[p.category]||0)+p.currentValueCZK; });
+                  portfolio.positions.forEach(p => {
+                    // Use currentValueCZK if available, otherwise cost basis
+                    const val = p.currentValueCZK > 0 ? p.currentValueCZK : p.totalCostCZK;
+                    cats[p.category]=(cats[p.category]||0)+val;
+                  });
                   const total = Object.values(cats).reduce((s,v)=>s+v,0)||1;
                   const entries = Object.entries(cats).filter(([,v])=>v>0);
                   const rad=72,cx=95,cy=90,tw=230,th=180;
@@ -4011,16 +4015,17 @@ export default function App() {
             <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:14, marginBottom:14 }}>
               <div style={S.card}>
                 <div style={S.sectionTitle}>Top pozice (CZK)</div>
-                {[...portfolio.positions].sort((a,b)=>b.currentValueCZK-a.currentValueCZK).slice(0,6).map(p=>{
-                  const maxV=Math.max(...portfolio.positions.map(x=>x.currentValueCZK),1);
+                {[...portfolio.positions].sort((a,b)=>(b.currentValueCZK||b.totalCostCZK)-(a.currentValueCZK||a.totalCostCZK)).slice(0,6).map(p=>{
+                  const dispVal = p.currentValueCZK > 0 ? p.currentValueCZK : p.totalCostCZK;
+                  const maxV=Math.max(...portfolio.positions.map(x=>x.currentValueCZK>0?x.currentValueCZK:x.totalCostCZK),1);
                   return (
                     <div key={p.ticker} style={{marginBottom:8}}>
                       <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
                         <span style={{fontSize:11,fontWeight:700,color:textPrimary}}>{p.ticker}</span>
-                        <span style={{fontSize:11,color:textSec}}>{fmt(p.currentValueCZK,"CZK",0)}</span>
+                        <span style={{fontSize:11,color:textSec}}>{p.currentValueCZK>0?fmt(p.currentValueCZK,"CZK",0):`${fmt(p.totalCostCZK,"CZK",0)} (nákup)`}</span>
                       </div>
                       <div style={{background:darkMode?"#0a0f1e":"#e8edf5",borderRadius:4,height:6}}>
-                        <div style={{width:`${maxV>0?(p.currentValueCZK/maxV*100).toFixed(1):0}%`,height:6,borderRadius:4,background:catColor[p.category]||accent}}/>
+                        <div style={{width:`${maxV>0?(dispVal/maxV*100).toFixed(1):0}%`,height:6,borderRadius:4,background:catColor[p.category]||accent}}/>
                       </div>
                     </div>
                   );
