@@ -34,6 +34,57 @@ const TICKER_MAP = {
 // Czech stocks that need CZK currency
 const CZK_TICKERS = ["CEZ","MM0","FRA:TBK","MONET.PR","CEZ.PR","TABAK.PR"];
 
+
+// Detekce evropských burz
+const isEuropean = (t) => /\.(L|DE|PA|AS|MI|MA|BR|VX|HE|OL|ST|CO|LS|AT|WA|F|BE|DU|MU|SG|HM|VI)$/i.test(t);
+
+// Odhad měny z burzy (fallback)
+function detectCurrency(ticker) {
+  if (/\.L$/i.test(ticker)) return "GBP";
+  if (/\.(DE|F|BE|DU|MU|SG|HM|PA|AS|MI|MA|BR|HE|LS|AT|VI)$/i.test(ticker)) return "EUR";
+  if (/\.VX$/i.test(ticker)) return "CHF";
+  if (/\.OL$/i.test(ticker)) return "NOK";
+  if (/\.ST$/i.test(ticker)) return "SEK";
+  if (/\.CO$/i.test(ticker)) return "DKK";
+  if (/\.WA$/i.test(ticker)) return "PLN";
+  if (/\.PR$/i.test(ticker)) return "CZK";
+  return "EUR";
+}
+
+// Yahoo Finance v8 — funguje bez API klíče, pokrývá všechny světové burzy
+async function fetchYahoo(ticker) {
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5d`;
+    const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return null;
+    const data = await r.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) return null;
+    const meta = result.meta;
+    const price = meta.regularMarketPrice;
+    if (!price || price === 0) return null;
+    const prevClose = meta.chartPreviousClose || meta.previousClose || price;
+    const change1d = prevClose ? ((price - prevClose) / prevClose) * 100 : 0;
+    // LSE quotes v GBp (pence) — převedeme na GBP
+    const rawCurrency = meta.currency || detectCurrency(ticker);
+    let finalPrice = price;
+    let finalCurrency = rawCurrency;
+    if (rawCurrency === "GBp") { finalPrice = price / 100; finalCurrency = "GBP"; }
+    const shortName = meta.longName || meta.shortName || ticker;
+    return {
+      price: parseFloat(finalPrice.toFixed(4)),
+      currency: finalCurrency,
+      change1d: parseFloat(change1d.toFixed(2)),
+      shortName,
+      source: "Yahoo",
+      lastUpdated: new Date().toISOString(),
+    };
+  } catch { return null; }
+}
+
 async function fetchFinnhub(symbol, apiKey) {
   const finnSym = TICKER_MAP[symbol] || symbol;
   try {
@@ -96,14 +147,22 @@ export default async function handler(req, res) {
   if (finnhubKey) {
     // Finnhub: batch fetch all tickers in parallel (60/min limit — fine for 50 tickers)
     await Promise.allSettled(stockTickers.map(async (ticker) => {
-      const data = await fetchFinnhub(ticker, finnhubKey);
+      // Evropské burzy jdou rovnou na Yahoo, Finnhub je nemá
+      let data = isEuropean(ticker) ? null : await fetchFinnhub(ticker, finnhubKey);
       const shortName = KNOWN_NAMES[ticker] || data?.shortName || ticker;
       const isCzkTicker = ["CEZ","MM0","FRA:TBK"].includes(ticker);
     if (data) {
       if (isCzkTicker) data.currency = "CZK";
       results[ticker] = { ...data, shortName, lastUpdated: new Date().toISOString() };
     } else {
-      results[ticker] = { price: 0, currency: isCzkTicker ? "CZK" : "USD", change1d: 0, shortName, lastUpdated: new Date().toISOString(), source: "fallback" };
+      // Finnhub selhal — zkus Yahoo Finance (evropské ETF, neznámé tickery)
+      const yahooData = await fetchYahoo(ticker);
+      if (yahooData) {
+        results[ticker] = { ...yahooData, shortName: yahooData.shortName || shortName };
+        if (yahooData.shortName && yahooData.shortName !== ticker) fetchedNames[ticker] = yahooData.shortName;
+      } else {
+        results[ticker] = { price: 0, currency: isCzkTicker ? "CZK" : isEuropean(ticker) ? detectCurrency(ticker) : "USD", change1d: 0, shortName, lastUpdated: new Date().toISOString(), source: "fallback" };
+      }
     }
 
       // Fetch company name and fundamentals if not in KNOWN_NAMES
