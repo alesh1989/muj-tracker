@@ -68,7 +68,7 @@ const fmt = (n, currency = "CZK", decimals = 0) => {
   return new Intl.NumberFormat("cs-CZ", { style: "currency", currency, minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(n);
 };
 const fmtPct = (n) => (isNaN(n) || n === null ? "–" : `${n >= 0 ? "+" : ""}${n.toFixed(2)} %`);
-const fmtDate = (d) => new Date(d).toLocaleDateString("cs-CZ");
+const fmtDate = (d) => { try { const dt=new Date(d); if(isNaN(dt)) return d||""; return dt.toLocaleDateString("cs-CZ",{day:"2-digit",month:"2-digit",year:"numeric"}); } catch { return d||""; } };
 const daysSince = (dateStr) => Math.floor((Date.now() - new Date(dateStr)) / 86400000);
 const toCZK = (amount, currency, rates) => {
   if (!amount || isNaN(amount)) return 0;
@@ -588,7 +588,7 @@ const ValuationAnalyzer = ({ rates }) => {
     input: { background: "#0a0f1e", border: "1px solid #334155", borderRadius: 5, color: "#e2e8f0", padding: "6px 10px", fontSize: 12, fontFamily: "inherit", width: "100%", boxSizing: "border-box" },
     select: { background: "#0a0f1e", border: "1px solid #334155", borderRadius: 5, color: "#e2e8f0", padding: "6px 10px", fontSize: 12, fontFamily: "inherit", width: "100%", boxSizing: "border-box" },
     row: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 },
-    sectionTitle: { fontSize: 10, fontWeight: 700, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12, paddingBottom: 6, borderBottom: "1px solid #1e293b" },
+    sectionTitle: { fontSize: 10, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12, paddingBottom: 6, borderBottom: "1px solid #1e293b" },
     resultCard: (color) => ({ background: color + "11", border: `1px solid ${color}33`, borderRadius: 8, padding: 16, marginTop: 12 }),
     metricRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #0f172a", fontSize: 12 },
   };
@@ -4464,7 +4464,13 @@ export default function App() {
                         ))}
                       </tr></thead>
                       <tbody>
-                        {filtered.map(t=>{
+                        {(() => {
+                          // Sort all transactions by date for sequential IDs
+                          const allSorted = [...activeTransactions].sort((a,b)=>new Date(a.date)-new Date(b.date));
+                          const idMap = {};
+                          allSorted.forEach((t,i)=>{ idMap[t.id]=i+1; });
+                          return filtered.map(t=>{
+                          const seqId = idMap[t.id]||"";
                           const tc = TX_TYPE_COLORS[t.type]||"#94a3b8";
                           const cc = TX_CAT_COLORS[t.category]||"#64748b";
                           const tl = TX_TYPE_LABELS[t.type]||t.type;
@@ -4477,7 +4483,8 @@ export default function App() {
                           const rowBg = t.type==="buy"?"#3b82f608":t.type==="deposit"?"#10b98108":t.type==="sell"?"#ef444408":t.type==="withdraw"?"#f9731608":"transparent";
                           return (
                             <tr key={t.id} style={{background:rowBg,borderLeft:`3px solid ${tc}`}}>
-                              <td style={S.td}>{t.date}</td>
+                              <td style={{...S.td,color:textMuted,fontSize:10,minWidth:28}}>{seqId}</td>
+                              <td style={S.td}>{fmtDate(t.date)}</td>
                               <td style={S.td}>
                                 <span style={{...S.badge(tc),minWidth:62,textAlign:"center",display:"inline-block"}}>{tl}</span>
                               </td>
@@ -4491,9 +4498,9 @@ export default function App() {
                               </td>
                               <td style={S.td}>{isDepWith||t.type==="dividend"?"–":t.quantity}</td>
                               <td style={S.td}>
-                                {t.type==="dividend"?fmt(getDivCZK(t),"CZK",0)+" CZK":isDepWith?fmt(t.amount||0,t.currency,0):`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency}`}
+                                {t.type==="dividend"?fmt(getDivCZK(t),"CZK",0):isDepWith?fmt(t.amount||0,t.currency,0):`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency}`}
                               </td>
-                              <td style={S.td}>{t.fee?`${t.fee} ${t.currency}`:"–"}</td>
+                              <td style={S.td}>{t.fee?`${(t.fee||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:2})} ${t.currency}`:"–"}</td>
                               <td style={{...S.td,fontWeight:600,color:t.type==="sell"||t.type==="withdraw"?"#f87171":"#22d3a0"}}>{fmt(totalCZK,"CZK",0)}</td>
                               <td style={S.td}>
                                 <div style={{display:"flex",gap:4}}>
@@ -4768,7 +4775,7 @@ export default function App() {
             {/* Tax year selector */}
             {(() => {
               const taxYears = [...new Set(activeTransactions.map(t=>new Date(t.date).getFullYear()))].sort().reverse();
-              const [taxYear, setTaxYear] = [divCalYear, setDivCalYear]; // reuse divCalYear state
+              const taxYear = divCalYear; const setTaxYear = setDivCalYear;
               const yearTx = activeTransactions.filter(t=>new Date(t.date).getFullYear()===taxYear);
 
               // Dividendy
