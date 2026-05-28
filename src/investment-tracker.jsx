@@ -5131,15 +5131,19 @@ export default function App() {
                     }).map(p=>{
                       const typeColor = {buy:"#10b981",sell:"#ef4444",dividend:"#8b5cf6",deposit:"#22d3a0",withdraw:"#f59e0b"};
                       const isPos = p.gainCZK >= 0;
+                      const noPx = !p.currentPrice || p.currentPrice === 0;
                       return (
-                        <tr key={p.ticker} style={{ borderLeft:`2px solid ${catColor[p.category]||"#334155"}` }}>
+                        <tr key={p.ticker} style={{ borderLeft:`2px solid ${noPx?"#f59e0b":catColor[p.category]||"#334155"}`,background:noPx?"#f59e0b08":"transparent" }}>
                           <td style={S.td}>
-                            <div style={{fontWeight:700,color:textPrimary}}>{p.ticker}</div>
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <span style={{fontWeight:700,color:textPrimary}}>{p.ticker}</span>
+                              {noPx&&<span title="Cena není k dispozici — zadej ručně v Nastavení → Ruční update cen" style={{background:"#f59e0b22",color:"#f59e0b",fontSize:9,fontWeight:700,padding:"1px 5px",borderRadius:4,cursor:"help",border:"1px solid #f59e0b44"}}>⚠ bez ceny</span>}
+                            </div>
                             <div style={{fontSize:9,color:textMuted}}>{(tickerNames[p.ticker]||KNOWN_NAMES[p.ticker]||p.name||"")?.slice(0,20)}</div>
                             <span style={S.badge(catColor[p.category]||"#64748b")}>{catLabel[p.category]||p.category}</span>
                           </td>
                           <td style={S.td}>
-                            <div style={{fontWeight:600,color:textPrimary}}>{fmt(p.currentValueCZK,"CZK",0)}</div>
+                            <div style={{fontWeight:600,color:noPx?"#f59e0b":textPrimary}}>{noPx?"⚠ neznámá":fmt(p.currentValueCZK,"CZK",0)}</div>
                             <div style={{fontSize:10,color:textMuted}}>{p.totalQty.toFixed(p.category==="crypto"?4:2)} ks</div>
                           </td>
                           <td style={S.td}>
@@ -5329,7 +5333,16 @@ export default function App() {
                               <td style={S.td}>
                                 {isDepWith
                                   ? <span style={{color:textMuted,fontSize:11}}>–</span>
-                                  : <><b style={{color:textPrimary}}>{t.ticker}</b><div style={{fontSize:9,color:textMuted}}>{(tickerNames[t.ticker]||KNOWN_NAMES[t.ticker]||t.name||"")?.slice(0,16)}</div></>}
+                                  : <>
+                                      <div style={{display:"flex",alignItems:"center",gap:5}}>
+                                        <b style={{color:textPrimary}}>{t.ticker}</b>
+                                        {t.type==="buy"&&(!prices[t.ticker]||!prices[t.ticker]?.price)&&(
+                                          <span title="Živá cena chybí — doplň v Nastavení → Ruční update cen"
+                                            style={{background:"#f59e0b22",color:"#f59e0b",fontSize:8,fontWeight:700,padding:"1px 4px",borderRadius:3,border:"1px solid #f59e0b55",cursor:"help"}}>⚠</span>
+                                        )}
+                                      </div>
+                                      <div style={{fontSize:9,color:textMuted}}>{(tickerNames[t.ticker]||KNOWN_NAMES[t.ticker]||t.name||"")?.slice(0,16)}</div>
+                                    </>}
                               </td>
                               <td style={S.td}>
                                 <span style={{...S.badge(cc),minWidth:52,textAlign:"center",display:"inline-block"}}>{cl}</span>
@@ -5930,17 +5943,38 @@ export default function App() {
               {pricesStatus==="ok"&&<div style={{fontSize:11,color:"#22d3a0",marginBottom:10}}>✓ {lang==="en"?"Prices updated":"Ceny aktualizovány"}</div>}
               {pricesStatus==="error"&&<div style={{fontSize:11,color:"#f87171",marginBottom:10}}>⚠ {lang==="en"?"Could not fetch prices":"Nepodařilo se načíst ceny"}</div>}
               <div style={S.sectionTitle}>{lang==="en"?"Manual Price Update":"Ruční update cen"}</div>
-              {Object.entries(prices).filter(([,v])=>v?.price!==undefined).map(([ticker,data])=>(
-                <div key={ticker} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
-                  <span style={{fontWeight:700,color:textPrimary,minWidth:80}}>{ticker}</span>
-                  <input type="number" step="0.01" value={data.price} onChange={e=>setPrices(prev=>({...prev,[ticker]:{...prev[ticker],price:parseFloat(e.target.value)||0}}))} style={{...S.input,width:110}}/>
+              {/* Sort: missing prices first */}
+              {Object.entries(prices).filter(([,v])=>v?.price!==undefined)
+                .sort(([,a],[,b]) => (a.price>0?1:0)-(b.price>0?1:0))
+                .map(([ticker,data])=>{
+                  const missingPrice = !data.price || data.price === 0;
+                  return (
+                <div key={ticker} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap",
+                  background:missingPrice?"#f59e0b0a":"transparent",
+                  border:missingPrice?"1px solid #f59e0b33":"1px solid transparent",
+                  borderRadius:8,padding:missingPrice?"6px 8px":"0",
+                  transition:"all .2s"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,minWidth:100}}>
+                    {missingPrice&&<span style={{color:"#f59e0b",fontSize:14}}>⚠</span>}
+                    <span style={{fontWeight:700,color:missingPrice?"#f59e0b":textPrimary}}>{ticker}</span>
+                    {missingPrice&&<span style={{fontSize:9,color:"#f59e0b",fontWeight:600}}>doplň cenu</span>}
+                  </div>
+                  <input type="number" step="0.01" value={data.price} onChange={e=>setPrices(prev=>({...prev,[ticker]:{...prev[ticker],price:parseFloat(e.target.value)||0}}))}
+                    style={{...S.input,width:110,borderColor:missingPrice?"#f59e0b":undefined}}
+                    placeholder="0.00"/>
                   <select value={data.currency||"USD"} onChange={e=>setPrices(prev=>({...prev,[ticker]:{...prev[ticker],currency:e.target.value}}))} style={{...S.select,width:80}}>
                     {["USD","EUR","CZK","GBP"].map(c=><option key={c} value={c}>{c}</option>)}
                   </select>
                   {data.lastUpdated&&<span style={{fontSize:9,color:textMuted}}>{new Date(data.lastUpdated).toLocaleTimeString("cs-CZ",{hour:"2-digit",minute:"2-digit"})}</span>}
+                  {!missingPrice&&<span style={{fontSize:9,color:"#10b981"}}>✓</span>}
                   <button style={{...S.btn("danger"),padding:"3px 8px",fontSize:10}} onClick={()=>setPrices(prev=>{const n={...prev};delete n[ticker];return n;})}>✕</button>
                 </div>
-              ))}
+              );})}
+              {Object.entries(prices).filter(([,v])=>!v?.price).length>0&&(
+                <div style={{fontSize:11,color:"#f59e0b",marginTop:4,padding:"6px 10px",background:"#f59e0b11",borderRadius:6,border:"1px solid #f59e0b33"}}>
+                  ⚠ {Object.entries(prices).filter(([,v])=>!v?.price||v.price===0).length} ticker{Object.entries(prices).filter(([,v])=>!v?.price||v.price===0).length>1?"y":""}  bez ceny — hodnota portfolia bude neúplná
+                </div>
+              )}
               <div style={{display:"flex",gap:8,marginTop:10}}>
                 <input placeholder="Ticker" style={{...S.input,width:100}} id="newTickerInput"/>
                 <select id="newTickerCurrency" style={{...S.select,width:80}}>
