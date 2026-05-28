@@ -4459,7 +4459,7 @@ export default function App() {
                   <div style={{overflowX:"auto"}}>
                     <table style={S.table}>
                       <thead><tr>
-                        {["",lang==="en"?"Date":"Datum","Typ",lang==="en"?"Ticker":"Ticker","Kat.",lang==="en"?"Qty":"Mn.",lang==="en"?"Price":"Cena",lang==="en"?"Fee":"Popl.",lang==="en"?"Total CZK":"CZK",""].map((h,i)=>(
+                        {["",lang==="en"?"Date":"Datum","Typ",lang==="en"?"Ticker":"Ticker","Kat.",lang==="en"?"Qty":"Mn.",lang==="en"?"Price":"Cena",lang==="en"?"Fee":"Popl.",lang==="en"?"Total CZK":"CZK / čistá div.",""].map((h,i)=>(
                           <th key={i} style={S.th}>{h}</th>
                         ))}
                       </tr></thead>
