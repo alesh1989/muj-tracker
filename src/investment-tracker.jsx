@@ -4464,12 +4464,11 @@ export default function App() {
                         ))}
                       </tr></thead>
                       <tbody>
-                        {(()=>{
-                          const allSorted=[...activeTransactions].sort((a,b)=>new Date(a.date)-new Date(b.date));
-                          const idMap={};
-                          allSorted.forEach((t,i)=>{idMap[t.id]=i+1;});
-                          return filtered.map(t=>{
-                          const seqId=idMap[t.id]||"";
+                        {filtered.map((t,_fi)=>{
+                          const seqId = (() => {
+                            const allSorted=[...activeTransactions].sort((a,b)=>new Date(a.date)-new Date(b.date));
+                            return allSorted.findIndex(x=>x.id===t.id)+1;
+                          })();
                           const tc=TX_TYPE_COLORS[t.type]||"#94a3b8";
                           const cc = TX_CAT_COLORS[t.category]||"#64748b";
                           const tl = TX_TYPE_LABELS[t.type]||t.type;
