@@ -3192,7 +3192,7 @@ export default function App() {
         const di = localStorage.getItem(`${lsKey}_dividends`);
         const ea = localStorage.getItem(`${lsKey}_earnings`);
         const fi = localStorage.getItem(`${lsKey}_fi`);
-        if (tx) setTransactions(JSON.parse(tx));
+        if (tx) setTransactions(JSON.parse(tx).map(t=>t.type==="dividend"&&t.dividendAmount&&!t.dividendCZK?{...t,dividendCZK:true}:t));
         if (po) setPortfolios(JSON.parse(po));
         if (ap) setActivePortfolioId(JSON.parse(ap));
         if (di) setDividends(JSON.parse(di));
@@ -3228,7 +3228,7 @@ export default function App() {
             ticker: t.ticker, name: t.name, category: t.category,
             date: t.date, quantity: t.quantity, price: t.price,
             currency: t.currency, fee: t.fee,
-            dividendAmount: t.dividend_amount, amount: t.amount, notes: t.notes
+            dividendAmount: t.dividend_amount, dividendCZK: t.type==="dividend" && !!t.dividend_amount, amount: t.amount, notes: t.notes
           }));
           setTransactions(txs);
           localStorage.setItem(`${lsKey}_tx`, JSON.stringify(txs));
