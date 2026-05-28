@@ -1776,7 +1776,7 @@ Struktura:
   "summary": "2-3 věty o fundamentální kvalitě společnosti v češtině"
 }
 
-Každé pole musí mít přesně 10 hodnot odpovídající rokům \${sy}-\${cy}. Použij skutečná historická data. Pokud ticker neexistuje, vrať {"error": "Ticker nenalezen"}.`;
+Každé pole musí mít přesně 10 hodnot odpovídající rokům ${sy}-${cy}. Použij skutečná historická data. Pokud ticker neexistuje, vrať {"error": "Ticker nenalezen"}.`;
               })()
           }]
         })
@@ -4347,10 +4347,10 @@ export default function App() {
                 <button style={S.btn("outline")} onClick={()=>setShowCsvImport(true)}>📂 CSV</button>
                 <button style={S.btn("outline")} onClick={()=>{
                   const headers=["type","ticker","name","category","date","quantity","price","currency","fee","dividendAmount","amount","notes"];
-                  const rows=activeTransactions.map(t=>headers.map(h=>{const v=t[h]??"";return String(v).includes(",")?\`"${v}"\`:v;}).join(","));
+                  const rows=activeTransactions.map(t=>headers.map(h=>{const v=t[h]??"";return String(v).includes(",")?'"'+v+'"':v;}).join(","));
                   const csv=[headers.join(","),...rows].join("\n");
                   const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
-                  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=\`transakce-\${new Date().toISOString().slice(0,10)}.csv\`;a.click();
+                  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="transakce-"+new Date().toISOString().slice(0,10)+".csv";a.click();
                 }}>📤 Export</button>
                 <button style={{...S.btn("danger"),border:"1px solid #dc262644"}} onClick={()=>setShowDeleteAll(true)}>🗑</button>
               </div>
@@ -4402,7 +4402,7 @@ export default function App() {
                             fontWeight:active?700:400,
                             background:active?color+"33":"transparent",
                             color:active?color:textMuted,
-                            border:\`1px solid \${active?color:border}\`,
+                            border:`1px solid ${active?color:border}`,
                             transition:"all 0.15s"}}>
                           {label}
                         </button>
@@ -4436,7 +4436,7 @@ export default function App() {
                           const isDepWith = t.type==="deposit"||t.type==="withdraw";
                           const rowBg = t.type==="buy"?"#3b82f608":t.type==="deposit"?"#10b98108":t.type==="sell"?"#ef444408":t.type==="withdraw"?"#f9731608":"transparent";
                           return (
-                            <tr key={t.id} style={{background:rowBg,borderLeft:\`3px solid \${tc}\`}}>
+                            <tr key={t.id} style={{background:rowBg,borderLeft:`3px solid ${tc}`}}>
                               <td style={S.td}>{t.date}</td>
                               <td style={S.td}>
                                 <span style={{...S.badge(tc),minWidth:62,textAlign:"center",display:"inline-block"}}>{tl}</span>
@@ -4451,9 +4451,9 @@ export default function App() {
                               </td>
                               <td style={S.td}>{isDepWith||t.type==="dividend"?"–":t.quantity}</td>
                               <td style={S.td}>
-                                {t.type==="dividend"?fmt(t.dividendAmount,t.currency,2):isDepWith?fmt(t.amount||0,t.currency,0):\`\${t.price} \${t.currency}\`}
+                                {t.type==="dividend"?fmt(t.dividendAmount,t.currency,2):isDepWith?fmt(t.amount||0,t.currency,0):`${t.price} ${t.currency}`}
                               </td>
-                              <td style={S.td}>{t.fee?\`\${t.fee} \${t.currency}\`:"–"}</td>
+                              <td style={S.td}>{t.fee?`${t.fee} ${t.currency}`:"–"}</td>
                               <td style={{...S.td,fontWeight:600,color:t.type==="sell"||t.type==="withdraw"?"#f87171":"#22d3a0"}}>{fmt(totalCZK,"CZK",0)}</td>
                               <td style={S.td}>
                                 <div style={{display:"flex",gap:4}}>
