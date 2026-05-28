@@ -2888,7 +2888,7 @@ function DigrínDividendChart({ transactions, rates, tickerNames, S, textMuted, 
   const DCOLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#3b82f6","#22d3a0","#f97316","#a78bfa","#f43f5e","#84cc16"];
   const allTickers = [...new Set(divTx.map(t => t.ticker))];
 
-  const getAmt = (t) => toCZK(t.dividendAmount||0, t.currency||"CZK", rates);
+  const getAmt = (t) => ((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates));
 
   // Build period → ticker → amount
   const buildData = () => {
@@ -3552,7 +3552,7 @@ export default function App() {
         }
       } else if (t.type === "dividend" && t.dividendAmount) {
         // dividendAmount is already in CZK (converted at entry time)
-        totalDividendsCZK += (t.dividendCZK||t.currency==="CZK") ? (t.dividendAmount||0) : toCZK(t.dividendAmount||0, t.currency||"CZK", rates);
+        totalDividendsCZK += ((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates));
       } else if (t.type === "deposit") {
         // Deposits don't count as investment cost - they're cash inflows
       } else if (t.type === "withdraw") {
@@ -3582,7 +3582,7 @@ export default function App() {
 
       // Yield on Cost (YoC) — total dividends received / original cost
       const tickerDivs = transactions.filter(t => t.type === "dividend" && t.ticker === h.ticker);
-      const totalDivReceivedCZK = tickerDivs.reduce((s,t) => s + toCZK(t.dividendAmount||0, t.currency, rates), 0);
+      const totalDivReceivedCZK = tickerDivs.reduce((s,t) => s + ((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)), 0);
       const yoc = h.totalCostCZK > 0 ? (totalDivReceivedCZK / h.totalCostCZK) * 100 : 0;
 
       // Dividend Growth Rate (DGR3) — compare last 3 years of dividends
@@ -3595,7 +3595,7 @@ export default function App() {
       // Current div yield (annual div / current price) — estimate from last 4 divs
       const lastDivs = tickerDivs.slice(-4);
       const annualDivPerShare = lastDivs.length > 0 && h.totalQty > 0
-        ? lastDivs.reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0) / h.totalQty * (4 / lastDivs.length) : 0;
+        ? lastDivs.reduce((s,t)=>s+((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),0) / h.totalQty * (4 / lastDivs.length) : 0;
       const divYield = currentPrice > 0 && annualDivPerShare > 0 ? (annualDivPerShare / currentPrice) * 100 : 0;
 
       // Break-even price
@@ -4601,7 +4601,7 @@ export default function App() {
                 const yearDiv = activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear);
                 // dividendAmount is stored in CZK after conversion at entry time
                 // Use totalDividendsCZK from portfolio for current year
-                const received = yearDiv.reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0);
+                const received = yearDiv.reduce((s,t)=>s+((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),0);
                 const upcoming = dividends.filter(d=>new Date(d.date).getFullYear()===divCalYear).reduce((s,d)=>s+toCZK(d.amount||0,d.currency,rates),0);
                 const annualEst = received * 4;
                 return [
@@ -4645,7 +4645,7 @@ export default function App() {
               <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
                 {(lang==="en"?T.en.months:T.cs.months).map((monthName,mi)=>{
                   const now3=new Date();
-                  const received2=activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear&&new Date(t.date).getMonth()===mi).reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0);
+                  const received2=activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear&&new Date(t.date).getMonth()===mi).reduce((s,t)=>s+((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),0);
                   const upcoming2=dividends.filter(d=>new Date(d.date).getMonth()===mi&&new Date(d.date).getFullYear()===divCalYear).reduce((s,d)=>s+toCZK(d.amount||0,d.currency,rates),0);
                   const isCurrentMonth=mi===now3.getMonth()&&divCalYear===now3.getFullYear();
                   const isPast=new Date(divCalYear,mi+1,1)<=now3;
@@ -4789,7 +4789,7 @@ export default function App() {
                 const qty = t.quantity||1;
                 return s + toCZK(perShare*qty, t.currency||"CZK", rates);
               },0);
-              const divNet = divs.reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0);
+              const divNet = divs.reduce((s,t)=>s+((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),0);
               const divTaxPaid = divGross - divNet;
 
               // ── Prodeje — §10 ZDP ──────────────────────────────────────────────────
@@ -4906,7 +4906,7 @@ export default function App() {
                         <tbody>
                           {divs.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>{
                             const gross = toCZK((t.dividendPerShare||0)*(t.quantity||1),t.currency||"CZK",rates);
-                            const net = toCZK(t.dividendAmount||0,t.currency||"CZK",rates);
+                            const net = ((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates));
                             return (
                               <tr key={t.id}>
                                 <td style={S.td}>{fmtDate(t.date)}</td>
@@ -5004,7 +5004,7 @@ export default function App() {
                     <tr>
                       <td>${t.date}</td>
                       <td>${t.ticker}</td>
-                      <td style="text-align:right">${fmt(toCZK(t.dividendAmount||0,t.currency||"CZK",rates),"CZK",0)}</td>
+                      <td style="text-align:right">${fmt(((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),"CZK",0)}</td>
                     </tr>`).join("");
                   const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
                     <title>InvestTrack Report ${reportDate}</title>
