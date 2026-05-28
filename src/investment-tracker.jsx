@@ -1181,12 +1181,20 @@ function TipyTab({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, bo
                 const live = prData.prices[t.ticker];
                 if (live?.price) {
                   const realPrice = live.price;
-                  // Recalculate upside based on real price
                   const upside = t.fairValue ? ((t.fairValue - realPrice) / realPrice * 100) : t.upside;
-                  return {...t, currentPrice: realPrice, upside: parseFloat(upside.toFixed(1))};
+                  const upsideNum = parseFloat(upside.toFixed(1));
+                  // Recalculate rating based on real upside
+                  const rating = upsideNum >= 30 ? "Silný nákup"
+                    : upsideNum >= 15 ? "Nákup"
+                    : upsideNum >= 0  ? "Držet"
+                    : upsideNum >= -15 ? "Podvážit"
+                    : "Prodat";
+                  return {...t, currentPrice: realPrice, upside: upsideNum, rating};
                 }
                 return t;
               });
+              // Filter out tips with negative upside (overvalued based on real price)
+              data.tips = data.tips.filter(t => t.upside > -20);
             }
           }
         }
