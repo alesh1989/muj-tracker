@@ -333,43 +333,218 @@ const FIGauge = ({ pct }) => {
 
 // ─── FI PROJECTION CHART ──────────────────────────────────────────────────────
 const FIProjectionChart = ({ currentCZK, monthlySaving, annualReturn, targetCZK }) => {
-  const months = [];
-  const monthlyReturn = annualReturn / 100 / 12;
-  let balance = currentCZK;
-  let reached = false;
-  for (let m = 0; m <= 600 && !reached; m++) {
-    months.push({ m, balance });
-    if (balance >= targetCZK) reached = true;
-    balance = balance * (1 + monthlyReturn) + monthlySaving;
-  }
-  if (months.length < 2) return null;
-  const maxVal = Math.max(targetCZK * 1.1, months[months.length-1].balance);
-  const w = 560, h = 140, pad = { t: 8, b: 28, l: 62, r: 8 };
-  const iW = w - pad.l - pad.r, iH = h - pad.t - pad.b;
-  const xS = (i) => pad.l + (i / (months.length - 1)) * iW;
-  const yS = (v) => pad.t + iH - (v / maxVal) * iH;
-  const path = months.map((p, i) => `${i===0?"M":"L"}${xS(i)},${yS(p.balance)}`).join(" ");
+  const [tooltip, setTooltip] = useState(null);
+  const [hovX, setHovX] = useState(null);
+  const svgRef = useRef(null);
+
+  const now = new Date();
+  const buildSeries = (rate) => {
+    const pts = [];
+    const monthlyRate = rate / 100 / 12;
+    let bal = currentCZK;
+    for (let m = 0; m <= 480; m++) {
+      pts.push({ m, bal, year: now.getFullYear() + m/12 });
+      if (bal >= targetCZK * 1.5 && m > 12) break;
+      bal = bal * (1 + monthlyRate) + monthlySaving;
+    }
+    return pts;
+  };
+
+  const base = buildSeries(annualReturn);
+  const bull = buildSeries(annualReturn + 3);
+  const bear = buildSeries(Math.max(0, annualReturn - 3));
+
+  if (base.length < 2) return null;
+
+  // FI crossing points
+  const fiBase = base.find(p => p.bal >= targetCZK);
+  const fiBull = bull.find(p => p.bal >= targetCZK);
+  const fiBear = bear.find(p => p.bal >= targetCZK);
+
+  const fiDate = (months) => {
+    if (!months) return null;
+    const d = new Date(now.getFullYear(), now.getMonth() + months.m, 1);
+    return d.toLocaleDateString("cs-CZ", { month: "long", year: "numeric" });
+  };
+
+  const maxM = base[base.length-1].m;
+  const maxVal = Math.max(targetCZK * 1.15, base[base.length-1].bal, bull[bull.length-1].bal);
+
+  const W = 560, H = 220;
+  const pad = { t: 20, b: 36, l: 72, r: 16 };
+  const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
+
+  const xS = m => pad.l + (m / maxM) * iW;
+  const yS = v => pad.t + iH - Math.min(1, v / maxVal) * iH;
+
+  const makePath = (pts) => pts.map((p,i) => `${i===0?"M":"L"}${xS(p.m).toFixed(1)},${yS(p.bal).toFixed(1)}`).join(" ");
+  const makeArea = (pts, baseline) => {
+    const top = pts.map((p,i) => `${i===0?"M":"L"}${xS(p.m).toFixed(1)},${yS(p.bal).toFixed(1)}`).join(" ");
+    const bot = [...pts].reverse().map(p => `L${xS(p.m).toFixed(1)},${yS(baseline).toFixed(1)}`).join(" ");
+    return top + " " + bot + " Z";
+  };
+
+  // Grid
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(t => ({ v: maxVal * (1-t), y: pad.t + iH * t }));
+  const xTicks = [];
+  const step = Math.max(1, Math.floor(maxM / 8 / 12)) * 12;
+  for (let m = 0; m <= maxM; m += step) xTicks.push(m);
+
+  const fmtM = (v) => {
+    if (v >= 1e9) return (v/1e9).toFixed(2) + " mld";
+    if (v >= 1e6) return (v/1e6).toFixed(2) + " M";
+    if (v >= 1e3) return (v/1e3).toFixed(0) + " k";
+    return v.toFixed(0);
+  };
+
+  // Mouse hover handler
+  const handleMouseMove = (e) => {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const mRaw = ((mx - pad.l) / iW) * maxM;
+    const mIdx = Math.max(0, Math.min(base.length-1, Math.round(mRaw)));
+    const pt = base[mIdx];
+    const bullPt = bull[Math.min(mIdx, bull.length-1)];
+    const bearPt = bear[Math.min(mIdx, bear.length-1)];
+    if (mRaw < 0 || mRaw > maxM) { setTooltip(null); setHovX(null); return; }
+    const d = new Date(now.getFullYear(), now.getMonth() + pt.m, 1);
+    setHovX(xS(pt.m));
+    setTooltip({
+      x: xS(pt.m), y: yS(pt.bal),
+      date: d.toLocaleDateString("cs-CZ", { month: "short", year: "numeric" }),
+      years: (pt.m/12).toFixed(1),
+      base: pt.bal,
+      bull: bullPt.bal,
+      bear: bearPt.bal,
+    });
+  };
+
   const tY = yS(targetCZK);
-  const step = Math.max(1, Math.floor(months.length / 6));
+
   return (
-    <div style={{ overflowX: "auto" }}>
-      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", minWidth: 280, height: "auto" }}>
-        {[0,0.25,0.5,0.75,1].map(t => (
-          <g key={t}>
-            <line x1={pad.l} y1={pad.t+iH*t} x2={w-pad.r} y2={pad.t+iH*t} stroke="#1e293b" strokeWidth="1"/>
-            <text x={pad.l-4} y={pad.t+iH*t+4} textAnchor="end" fill="#8b9fc0" fontSize="8">{(maxVal*(1-t)/1000000).toFixed(1)}M</text>
-          </g>
+    <div>
+      {/* FI date badges */}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
+        {[
+          {label:"🐻 Bear ("+(annualReturn-3)+"%)", date:fiDate(fiBear), color:"#f87171", months:fiBear},
+          {label:"📈 Base ("+annualReturn+"%)", date:fiDate(fiBase), color:"#10b981", months:fiBase},
+          {label:"🐂 Bull ("+(annualReturn+3)+"%)", date:fiDate(fiBull), color:"#60a5fa", months:fiBull},
+        ].map((s,i) => (
+          <div key={i} style={{background:"#0a0f1e",border:`1px solid ${s.color}44`,borderRadius:10,padding:"8px 14px",flex:1,minWidth:140}}>
+            <div style={{fontSize:10,color:s.color,fontWeight:700,marginBottom:3}}>{s.label}</div>
+            <div style={{fontSize:13,fontWeight:800,color:s.color}}>{s.date || "∞"}</div>
+            {s.months && <div style={{fontSize:10,color:"#64748b",marginTop:2}}>za {(s.months.m/12).toFixed(1)} let</div>}
+          </div>
         ))}
-        {months.filter((_,i)=>i%step===0).map((p,i)=>(
-          <text key={i} x={xS(months.indexOf(months.filter((_,j)=>j%step===0)[i]))} y={h-4} textAnchor="middle" fill="#8b9fc0" fontSize="8">
-            {Math.floor(p.m/12)}r
-          </text>
+      </div>
+
+      <div style={{overflowX:"auto"}}>
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{width:"100%",minWidth:320,height:"auto",cursor:"crosshair"}}
+          onMouseMove={handleMouseMove} onMouseLeave={()=>{setTooltip(null);setHovX(null);}}>
+
+          <defs>
+            <linearGradient id="fiGradBase" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.25"/>
+              <stop offset="100%" stopColor="#10b981" stopOpacity="0.02"/>
+            </linearGradient>
+            <linearGradient id="fiGradBull" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#60a5fa" stopOpacity="0.15"/>
+              <stop offset="100%" stopColor="#60a5fa" stopOpacity="0.02"/>
+            </linearGradient>
+            <linearGradient id="fiGradBear" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#f87171" stopOpacity="0.1"/>
+              <stop offset="100%" stopColor="#f87171" stopOpacity="0.02"/>
+            </linearGradient>
+          </defs>
+
+          {/* Grid */}
+          {yTicks.map((tk,i) => (
+            <g key={i}>
+              <line x1={pad.l} y1={tk.y} x2={W-pad.r} y2={tk.y} stroke="#1e293b" strokeWidth={i===0?0:1}/>
+              <text x={pad.l-6} y={tk.y+4} textAnchor="end" fill="#475569" fontSize="9">{fmtM(tk.v)} Kč</text>
+            </g>
+          ))}
+          {xTicks.map((m,i) => {
+            const yr = Math.floor(m/12);
+            const d = new Date(now.getFullYear()+yr, now.getMonth(), 1);
+            return (
+              <g key={i}>
+                <line x1={xS(m)} y1={pad.t} x2={xS(m)} y2={H-pad.b} stroke="#1e293b" strokeWidth="1" strokeDasharray="2,4"/>
+                <text x={xS(m)} y={H-pad.b+14} textAnchor="middle" fill="#475569" fontSize="9">{d.getFullYear()}</text>
+              </g>
+            );
+          })}
+
+          {/* Today vertical line */}
+          <line x1={xS(0)} y1={pad.t} x2={xS(0)} y2={H-pad.b} stroke="#6366f1" strokeWidth="1.5" strokeDasharray="3,3"/>
+          <text x={xS(0)+3} y={pad.t+10} fill="#6366f1" fontSize="8">Dnes</text>
+
+          {/* FI target line */}
+          {targetCZK > 0 && (
+            <>
+              <line x1={pad.l} y1={tY} x2={W-pad.r} y2={tY} stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="6,3"/>
+              <text x={W-pad.r-2} y={tY-4} textAnchor="end" fill="#f59e0b" fontSize="9" fontWeight="700">FI cíl: {fmtM(targetCZK)} Kč</text>
+            </>
+          )}
+
+          {/* Bear area + line */}
+          <path d={makeArea(bear, maxVal)} fill="url(#fiGradBear)" opacity="0.7"/>
+          <path d={makePath(bear)} fill="none" stroke="#f87171" strokeWidth="1.5" strokeDasharray="5,3" opacity="0.7"/>
+
+          {/* Bull area + line */}
+          <path d={makeArea(bull, maxVal)} fill="url(#fiGradBull)" opacity="0.6"/>
+          <path d={makePath(bull)} fill="none" stroke="#60a5fa" strokeWidth="1.5" strokeDasharray="5,3" opacity="0.7"/>
+
+          {/* Base area + line */}
+          <path d={makeArea(base, maxVal)} fill="url(#fiGradBase)"/>
+          <path d={makePath(base)} fill="none" stroke="#10b981" strokeWidth="2.5"/>
+
+          {/* FI crossing markers */}
+          {fiBull && <circle cx={xS(fiBull.m)} cy={tY} r="5" fill="#60a5fa" opacity="0.9"/>}
+          {fiBase && <circle cx={xS(fiBase.m)} cy={tY} r="6" fill="#10b981"/>}
+          {fiBear && <circle cx={xS(fiBear.m)} cy={tY} r="5" fill="#f87171" opacity="0.9"/>}
+
+          {/* Current portfolio dot */}
+          <circle cx={xS(0)} cy={yS(currentCZK)} r="5" fill="#6366f1"/>
+          <text x={xS(0)+7} y={yS(currentCZK)+4} fill="#818cf8" fontSize="9">{fmtM(currentCZK)} Kč</text>
+
+          {/* Hover crosshair */}
+          {hovX && (
+            <line x1={hovX} y1={pad.t} x2={hovX} y2={H-pad.b} stroke="#ffffff" strokeWidth="1" strokeDasharray="2,3" opacity="0.3"/>
+          )}
+          {tooltip && (
+            <circle cx={tooltip.x} cy={tooltip.y} r="4" fill="#10b981" stroke="#fff" strokeWidth="1.5"/>
+          )}
+
+          {/* Axes */}
+          <line x1={pad.l} y1={pad.t} x2={pad.l} y2={H-pad.b} stroke="#334155" strokeWidth="1"/>
+          <line x1={pad.l} y1={H-pad.b} x2={W-pad.r} y2={H-pad.b} stroke="#334155" strokeWidth="1"/>
+        </svg>
+      </div>
+
+      {/* Tooltip box */}
+      {tooltip && (
+        <div style={{marginTop:8,padding:"10px 14px",background:"#0f1a2e",border:"1px solid #1e3a5f",borderRadius:10,fontSize:11}}>
+          <div style={{fontWeight:700,color:"#e2e8f0",marginBottom:6}}>📅 {tooltip.date} <span style={{color:"#64748b",fontWeight:400}}>({tooltip.years} let od teď)</span></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            <div><div style={{color:"#f87171",fontSize:10}}>🐻 Bear</div><div style={{fontWeight:700,color:"#f87171"}}>{fmtM(tooltip.bear)} Kč</div></div>
+            <div><div style={{color:"#10b981",fontSize:10}}>📈 Base</div><div style={{fontWeight:700,color:"#10b981"}}>{fmtM(tooltip.base)} Kč</div></div>
+            <div><div style={{color:"#60a5fa",fontSize:10}}>🐂 Bull</div><div style={{fontWeight:700,color:"#60a5fa"}}>{fmtM(tooltip.bull)} Kč</div></div>
+          </div>
+          {tooltip.base >= targetCZK && targetCZK > 0 && (
+            <div style={{marginTop:6,color:"#10b981",fontWeight:700,fontSize:11}}>✅ FI cíl dosažen!</div>
+          )}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div style={{display:"flex",gap:14,marginTop:10,fontSize:10,color:"#64748b",flexWrap:"wrap"}}>
+        {[["#10b981","Base výnos ("+annualReturn+"%)","─"],["#60a5fa","Optimistický (+"+"3%)","╌"],["#f87171","Konzervativní (-3%)","╌"],["#f59e0b","FI cíl","╌"],["#6366f1","Aktuální stav","●"]].map(([c,l,s],i)=>(
+          <span key={i}><span style={{color:c,fontWeight:700,marginRight:3}}>{s}</span>{l}</span>
         ))}
-        <line x1={pad.l} y1={tY} x2={w-pad.r} y2={tY} stroke="#f59e0b" strokeWidth="1" strokeDasharray="4,3" />
-        <text x={w-pad.r-2} y={tY-3} textAnchor="end" fill="#f59e0b" fontSize="8">FI cíl</text>
-        <path d={path} fill="none" stroke="#10b981" strokeWidth="2" />
-        <circle cx={xS(months.length-1)} cy={yS(months[months.length-1].balance)} r="3" fill="#10b981"/>
-      </svg>
+      </div>
     </div>
   );
 };
@@ -5333,37 +5508,15 @@ export default function App() {
                   const exp=fiSettings.monthlyExpenses||50000;
                   const fiNum=exp*12/(swr/100);
                   const monthly=fiSettings.monthlySavings||10000;
-                  const rate=(fiSettings.annualReturn||7)/100/12;
+                  const rate=fiSettings.annualReturn||7;
                   const curr=portfolio.totalCurrentCZK||0;
-                  const pts=[];
-                  let val2=curr;
-                  for(let i=0;i<=30;i++){
-                    pts.push({y:i,v:val2});
-                    for(let m=0;m<12;m++){val2=val2*(1+rate)+monthly;}
-                  }
-                  const maxV2=Math.max(...pts.map(p=>p.v),fiNum,1);
-                  const w2=300,h2=180,pad2={t:10,b:24,l:56,r:10};
-                  const iW2=w2-pad2.l-pad2.r,iH2=h2-pad2.t-pad2.b;
-                  const xS2=i=>pad2.l+(i/30)*iW2;
-                  const yS2=v=>pad2.t+iH2-(v/maxV2)*iH2;
-                  const path2=pts.map((p,i)=>`${i===0?"M":"L"}${xS2(p.y)},${yS2(p.v)}`).join(" ");
-                  const fiY=pts.find(p=>p.v>=fiNum)?.y;
                   return (
-                    <svg viewBox={`0 0 ${w2} ${h2}`} style={{width:"100%",height:"auto"}}>
-                      {[0,0.25,0.5,0.75,1].map(t3=>(
-                        <g key={t3}>
-                          <line x1={pad2.l} y1={pad2.t+iH2*t3} x2={w2-pad2.r} y2={pad2.t+iH2*t3} stroke="#1e293b" strokeWidth="1"/>
-                          <text x={pad2.l-4} y={pad2.t+iH2*t3+4} textAnchor="end" fill="#8b9fc0" fontSize="8">{(maxV2*(1-t3)/1e6).toFixed(1)}M</text>
-                        </g>
-                      ))}
-                      <line x1={pad2.l} y1={yS2(fiNum)} x2={w2-pad2.r} y2={yS2(fiNum)} stroke="#10b981" strokeWidth="1" strokeDasharray="4,3"/>
-                      <text x={w2-pad2.r} y={yS2(fiNum)-4} textAnchor="end" fill="#10b981" fontSize="8">FI {(fiNum/1e6).toFixed(1)}M</text>
-                      <path d={path2} fill="none" stroke={accent} strokeWidth="2"/>
-                      {fiY!=null&&<circle cx={xS2(fiY)} cy={yS2(fiNum)} r="4" fill="#10b981"/>}
-                      {[0,5,10,15,20,25,30].map(y=>(
-                        <text key={y} x={xS2(y)} y={h2-4} textAnchor="middle" fill="#8b9fc0" fontSize="8">{y}r</text>
-                      ))}
-                    </svg>
+                    <FIProjectionChart
+                      currentCZK={curr}
+                      monthlySaving={monthly}
+                      annualReturn={rate}
+                      targetCZK={fiNum}
+                    />
                   );
                 })()}
               </div>
