@@ -4666,23 +4666,75 @@ export default function App() {
               const divNet = divs.reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0);
               const divTaxPaid = divGross - divNet;
 
-              // Prodeje — základ daně (jen akcie držené < 3 roky)
+              // ── Prodeje — §10 ZDP ──────────────────────────────────────────────────
+              // Pravidla ČR:
+              // 1. Časový test: akcie držené 3+ roky (1095 dní) → osvobozeno
+              // 2. Hodnotový limit: celkové příjmy z prodeje < 100 000 Kč/rok → osvobozeno
+              // 3. Ztráty z prodejů lze kompenzovat se zisky v témže roce
+              // FIFO: první koupené = první prodané (pro výpočet doby držení)
               const sells = yearTx.filter(t=>t.type==="sell");
-              const taxableSells = sells.map(t=>{
-                const buyTx = activeTransactions.filter(b=>b.type==="buy"&&b.ticker===t.ticker&&new Date(b.date)<new Date(t.date));
-                const avgCostPerShare = buyTx.length>0 ? buyTx.reduce((s,b)=>s+toCZK(b.quantity*b.price+(b.fee||0),b.currency,rates),0)/buyTx.reduce((s,b)=>s+b.quantity,0) : 0;
-                const costCZK = avgCostPerShare * (t.quantity||0);
-                const revenueCZK = toCZK((t.quantity||0)*(t.price||0),t.currency,rates);
+              const taxableSells = sells.map(sell=>{
+                // FIFO: vezmi nákupy seřazené od nejstaršího
+                const buyTx = activeTransactions
+                  .filter(b=>b.type==="buy" && b.ticker===sell.ticker && new Date(b.date)<=new Date(sell.date))
+                  .sort((a,b)=>new Date(a.date)-new Date(b.date));
+                // FIFO cost + doba držení pro prodaný počet kusů
+                let remaining = sell.quantity||0;
+                let costCZK = 0;
+                let oldestBuyDate = null;
+                let newestBuyDate = null;
+                for (const buy of buyTx) {
+                  if (remaining <= 0) break;
+                  const usedQty = Math.min(remaining, buy.quantity||0);
+                  const costPerShare = toCZK(buy.price+(buy.fee||0)/Math.max(buy.quantity,1), buy.currency, rates);
+                  costCZK += usedQty * costPerShare;
+                  if (!oldestBuyDate) oldestBuyDate = buy.date;
+                  newestBuyDate = buy.date;
+                  remaining -= usedQty;
+                }
+                const revenueCZK = toCZK((sell.quantity||0)*(sell.price||0), sell.currency, rates);
                 const gainCZK = revenueCZK - costCZK;
-                const earliestBuy = buyTx.sort((a,b)=>new Date(a.date)-new Date(b.date))[0];
-                const daysHeld2 = earliestBuy ? Math.floor((new Date(t.date)-new Date(earliestBuy.date))/86400000) : 0;
-                const taxExempt = daysHeld2 >= 1095; // 3 roky
-                return {ticker:t.ticker,date:t.date,qty:t.quantity,revenueCZK,costCZK,gainCZK,daysHeld:daysHeld2,taxExempt};
+                // Doba držení = od NEJSTARŠÍHO nákupu (FIFO)
+                const daysHeld = oldestBuyDate
+                  ? Math.floor((new Date(sell.date)-new Date(oldestBuyDate))/86400000) : 0;
+                // Časový test: 3+ roky = osvobozeno
+                const timeExempt = daysHeld >= 1095;
+                return {
+                  ticker:sell.ticker, date:sell.date, qty:sell.quantity,
+                  revenueCZK, costCZK, gainCZK, daysHeld,
+                  timeExempt,
+                  oldestBuyDate, newestBuyDate,
+                };
               });
-              const taxableSellGain = taxableSells.filter(s=>!s.taxExempt&&s.gainCZK>0).reduce((s,t)=>s+t.gainCZK,0);
-              const exemptSellGain = taxableSells.filter(s=>s.taxExempt).reduce((s,t)=>s+t.gainCZK,0);
-              const totalTaxBase = Math.max(0, taxableSellGain) + Math.max(0, divGross);
+
+              // Celkové příjmy z prodeje (hrubé, bez ohledu na zisk/ztrátu)
+              const totalSellRevenue = taxableSells.reduce((s,t)=>s+t.revenueCZK,0);
+              // Hodnotový limit: pokud celkové příjmy < 100 000 Kč → vše osvobozeno
+              const valueExempt = totalSellRevenue < 100000;
+
+              // Zdanitelné vs osvobozené prodeje
+              const taxableSellsList = taxableSells.filter(s => !s.timeExempt && !valueExempt);
+              const exemptByTime = taxableSells.filter(s => s.timeExempt);
+              const exemptByValue = valueExempt ? taxableSells.filter(s => !s.timeExempt) : [];
+
+              // Základ daně z prodejů = zisky - ztráty (§10 odst. 1 písm. b) — lze kompenzovat v rámci roku)
+              const sellGains = taxableSellsList.filter(s=>s.gainCZK>0).reduce((s,t)=>s+t.gainCZK,0);
+              const sellLosses = taxableSellsList.filter(s=>s.gainCZK<0).reduce((s,t)=>s+t.gainCZK,0);
+              const netSellGain = Math.max(0, sellGains + sellLosses); // ztráty kompenzují zisky
+
+              // Základ daně celkem
+              // Dividendy: srážková daň obvykle již sražena u zdroje — nezahrnujeme do §10
+              // Pokud dividendy ze zahraničí bez srážky → §8
+              const divUnwithheld = divs.filter(t=>(t.divTax||15)===0).reduce((s,t)=>s+toCZK((t.dividendPerShare||0)*(t.quantity||1),t.currency||"CZK",rates),0);
+              const totalTaxBase = netSellGain + divUnwithheld;
               const estimatedTax = totalTaxBase * 0.15;
+
+              // Status badge helper
+              const exemptStatus = (s) => {
+                if (s.timeExempt) return {text:"✓ Časový test (3+ roky)", color:"#10b981"};
+                if (valueExempt) return {text:"✓ Limit < 100 000 Kč", color:"#10b981"};
+                return {text:"⚠ Zdanitelné", color:"#f59e0b"};
+              };
 
               return (
                 <div>
@@ -4752,28 +4804,28 @@ export default function App() {
                     {taxableSells.length > 0 ? (
                       <table style={S.table}>
                         <thead><tr>
-                          {["Datum","Ticker","Počet","Příjem (CZK)","Náklad (CZK)","Zisk/Ztráta","Drženo","Status"].map(h=><th key={h} style={S.th}>{h}</th>)}
+                          {["Datum prodeje","Ticker","Počet","Příjem (CZK)","Náklad FIFO (CZK)","Zisk/Ztráta","Nákup (FIFO)","Drženo dní","Status"].map(h=><th key={h} style={S.th}>{h}</th>)}
                         </tr></thead>
                         <tbody>
-                          {taxableSells.map((s,i)=>(
-                            <tr key={i}>
-                              <td style={S.td}>{s.date}</td>
-                              <td style={S.td}><b style={{color:textPrimary}}>{s.ticker}</b></td>
-                              <td style={S.td}>{s.qty}</td>
-                              <td style={S.td}>{fmt(s.revenueCZK,"CZK",0)}</td>
-                              <td style={S.td}>{fmt(s.costCZK,"CZK",0)}</td>
-                              <td style={{...S.td,color:s.gainCZK>=0?"#10b981":"#f87171",fontWeight:600}}>{fmt(s.gainCZK,"CZK",0)}</td>
-                              <td style={S.td}>{s.daysHeld}d</td>
-                              <td style={S.td}>
-                                {s.taxExempt
-                                  ? <span style={{color:"#10b981",fontSize:10}}>✓ Osvobozeno</span>
-                                  : <span style={{color:"#f59e0b",fontSize:10}}>⚠ Zdanitelné</span>}
-                              </td>
-                            </tr>
-                          ))}
+                          {taxableSells.map((s,i)=>{
+                            const st = exemptStatus(s);
+                            return (
+                              <tr key={i}>
+                                <td style={S.td}>{s.date}</td>
+                                <td style={S.td}><b style={{color:textPrimary}}>{s.ticker}</b></td>
+                                <td style={S.td}>{s.qty}</td>
+                                <td style={S.td}>{fmt(s.revenueCZK,"CZK",0)}</td>
+                                <td style={S.td}>{fmt(s.costCZK,"CZK",0)}</td>
+                                <td style={{...S.td,color:s.gainCZK>=0?"#10b981":"#f87171",fontWeight:600}}>{fmt(s.gainCZK,"CZK",0)}</td>
+                                <td style={{...S.td,fontSize:10,color:textMuted}}>{s.oldestBuyDate||"–"}</td>
+                                <td style={S.td}>{s.daysHeld}d ({(s.daysHeld/365).toFixed(1)}r)</td>
+                                <td style={S.td}><span style={{color:st.color,fontSize:10,fontWeight:600}}>{st.text}</span></td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
-                    ) : <div style={{color:textMuted,fontSize:11}}>{lang==="en"?"No sales in this year":"Žádné prodeje v tomto roce"}</div>}
+                    ) : <div style={{color:textMuted,fontSize:11}}>Žádné prodeje v {taxYear}</div>}
                   </div>
                 </div>
               );
