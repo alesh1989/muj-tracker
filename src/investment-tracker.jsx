@@ -4510,7 +4510,8 @@ export default function App() {
                               </td>
                             </tr>
                           );
-                        })}
+                        });
+                        })()}
                       </tbody>
                     </table>
                   </div>
