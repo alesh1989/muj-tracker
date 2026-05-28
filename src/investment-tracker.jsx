@@ -3170,6 +3170,298 @@ const DrawdownChart = ({ transactions, prices, rates, portfolioCurrentCZK=0 }) =
 };
 
 
+
+// ─── DIGRIN-STYLE DIVIDEND TABLE CALENDAR ────────────────────────────────────
+function DigrinCalendar({ transactions, rates, tickerNames, S, textMuted, textPrimary, textSec, border, bgCard, darkMode, lang }) {
+  const [showGross, setShowGross] = useState(true);
+
+  const now = new Date();
+  // 6 měsíců zpět, aktuální, 6 dopředu = 13 měsíců
+  const months = [];
+  for (let i = -6; i <= 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    months.push({ year: d.getFullYear(), month: d.getMonth(), label: d.toLocaleString(lang==="en"?"en-US":"cs-CZ", { month: "short", year: "2-digit" }) });
+  }
+
+  const divTx = transactions.filter(t => t.type === "dividend");
+  const allTickers = [...new Set(divTx.map(t => t.ticker))].sort();
+
+  // Helper: get CZK amount (net)
+  const getNet = (t) => (t.dividendCZK||(t.currency||"USD")==="CZK") ? (t.dividendAmount||0) : toCZK(t.dividendAmount||0, t.currency||"USD", rates);
+  // Helper: gross = net / (1 - tax%)
+  const getGross = (t) => { const net = getNet(t); const tax = (parseFloat(t.divTax)||15)/100; return tax > 0 && tax < 1 ? net/(1-tax) : net; };
+  const getAmt = (t) => showGross ? getGross(t) : getNet(t);
+
+  // Build lookup: ticker → month-key → {amount, status}
+  // status: "paid" = historical tx, "upcoming" = future estimated
+  const lookup = {}; // ticker → "YYYY-M" → {amount, status}
+  const monthTotals = {}; // "YYYY-M" → amount
+
+  divTx.forEach(t => {
+    const d = new Date(t.date);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!lookup[t.ticker]) lookup[t.ticker] = {};
+    lookup[t.ticker][key] = (lookup[t.ticker][key] || 0) + getAmt(t);
+    monthTotals[key] = (monthTotals[key] || 0) + getAmt(t);
+  });
+
+  // Predict future months: find last payment per ticker, estimate next periods
+  const predicted = {}; // ticker → "YYYY-M" → amount (estimated)
+  allTickers.forEach(ticker => {
+    const txs = divTx.filter(t => t.ticker === ticker).sort((a,b) => new Date(a.date)-new Date(b.date));
+    if (!txs.length) return;
+
+    // Detect payment frequency: gaps between payments in months
+    const gaps = [];
+    for (let i = 1; i < txs.length; i++) {
+      const a = new Date(txs[i-1].date), b = new Date(txs[i].date);
+      const g = (b.getFullYear()-a.getFullYear())*12 + b.getMonth()-a.getMonth();
+      if (g > 0) gaps.push(g);
+    }
+    const freq = gaps.length ? Math.round(gaps.reduce((s,g)=>s+g,0)/gaps.length) : 3; // default quarterly
+    const clampedFreq = Math.max(1, Math.min(12, freq));
+
+    // Average amount (last 4 payments)
+    const last4 = txs.slice(-4);
+    const avgAmt = last4.reduce((s,t) => s+getAmt(t), 0) / last4.length;
+
+    // Last payment date
+    const lastTx = txs[txs.length-1];
+    const lastDate = new Date(lastTx.date);
+    let nextDate = new Date(lastDate.getFullYear(), lastDate.getMonth() + clampedFreq, 1);
+
+    // Project future payments within our 6-month window
+    const futureLimit = new Date(now.getFullYear(), now.getMonth() + 7, 1);
+    while (nextDate < futureLimit) {
+      const key = `${nextDate.getFullYear()}-${nextDate.getMonth()}`;
+      if (!lookup[ticker]?.[key]) { // don't overwrite real data
+        if (!predicted[ticker]) predicted[ticker] = {};
+        predicted[ticker][key] = avgAmt;
+        if (!monthTotals[key]) monthTotals[key] = 0;
+        // don't add to monthTotals — shown separately
+      }
+      nextDate = new Date(nextDate.getFullYear(), nextDate.getMonth() + clampedFreq, 1);
+    }
+  });
+
+  const grandTotal = Object.values(monthTotals).reduce((s,v)=>s+v,0);
+  const predictedTotal = allTickers.reduce((s, tk) => s + Object.values(predicted[tk]||{}).reduce((ss,v)=>ss+v,0), 0);
+
+  const fmtAmt = (v, currency) => {
+    if (!v) return null;
+    if (currency === "CZK" || !currency) return `Kč${Math.round(v).toLocaleString("cs-CZ")}`;
+    return `${currency}${Number(v).toFixed(2)}`;
+  };
+  const fmtCZK = (v) => v ? `${Math.round(v).toLocaleString("cs-CZ")} Kč` : null;
+
+  // Is month in the past, current, or future?
+  const monthStatus = (year, month) => {
+    const nm = now.getFullYear()*12 + now.getMonth();
+    const mm = year*12 + month;
+    if (mm < nm) return "past";
+    if (mm === nm) return "current";
+    return "future";
+  };
+
+  const COL_W = 72;
+  const TICKER_W = 72;
+
+  const cellBg = (status, hasPaid, hasPred) => {
+    if (hasPaid) return darkMode ? "#064e3b" : "#d1fae5";   // green = paid
+    if (hasPred) {
+      if (status === "future") return darkMode ? "#1e1a4e" : "#ede9fe"; // purple = estimated
+      return darkMode ? "#1a2a4e" : "#dbeafe"; // blue = upcoming (near future)
+    }
+    return "transparent";
+  };
+  const cellColor = (hasPaid, hasPred, status) => {
+    if (hasPaid) return "#10b981";
+    if (hasPred) return status === "future" ? "#8b5cf6" : "#3b82f6";
+    return textMuted;
+  };
+
+  return (
+    <div style={S.card}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={S.sectionTitle}>Dividend Calendar</div>
+          <div style={{fontSize:11,color:textMuted,marginTop:2}}>
+            <span style={{color:"#10b981",fontWeight:700}}>■</span> Vyplaceno &nbsp;
+            <span style={{color:"#3b82f6",fontWeight:700}}>■</span> Nadcházející &nbsp;
+            <span style={{color:"#8b5cf6",fontWeight:700}}>■</span> Odhad
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          <button onClick={()=>setShowGross(true)}
+            style={{fontSize:11,padding:"4px 12px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:showGross?700:400,
+              background:showGross?"#10b98133":"transparent",color:showGross?"#10b981":textMuted,border:`1px solid ${showGross?"#10b981":border}`}}>
+            Gross
+          </button>
+          <button onClick={()=>setShowGross(false)}
+            style={{fontSize:11,padding:"4px 12px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:!showGross?700:400,
+              background:!showGross?"#6366f133":"transparent",color:!showGross?"#818cf8":textMuted,border:`1px solid ${!showGross?"#6366f1":border}`}}>
+            Net
+          </button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{overflowX:"auto"}}>
+        <table style={{borderCollapse:"collapse",fontSize:11,minWidth:TICKER_W + months.length*COL_W}}>
+          <thead>
+            <tr>
+              {/* Empty corner */}
+              <th style={{padding:"6px 8px",textAlign:"left",color:textMuted,fontSize:10,borderBottom:`2px solid ${border}`,minWidth:TICKER_W,position:"sticky",left:0,background:darkMode?"#161d30":"#eef2f9",zIndex:2}}></th>
+              {/* Total column */}
+              <th style={{padding:"6px 8px",textAlign:"right",color:textMuted,fontSize:10,borderBottom:`2px solid ${border}`,minWidth:64,background:darkMode?"#161d30":"#eef2f9",fontWeight:700}}>Total</th>
+              {/* Month columns */}
+              {months.map(({year,month,label},i) => {
+                const st = monthStatus(year,month);
+                return (
+                  <th key={i} style={{padding:"6px 8px",textAlign:"center",fontSize:10,fontWeight:st==="current"?800:600,
+                    color:st==="current"?"#6366f1":st==="past"?textMuted:textSec,
+                    borderBottom:`2px solid ${st==="current"?"#6366f1":border}`,
+                    minWidth:COL_W,
+                    background:st==="current"?(darkMode?"#1a1a4e":"#ede9fe"):"transparent"}}>
+                    {label}
+                  </th>
+                );
+              })}
+            </tr>
+            {/* Total row */}
+            <tr style={{background:darkMode?"#0d1220":"#f1f5f9"}}>
+              <td style={{padding:"5px 8px",fontWeight:700,color:textPrimary,fontSize:11,position:"sticky",left:0,background:darkMode?"#0d1220":"#f1f5f9",zIndex:2}}>Total:</td>
+              <td style={{padding:"5px 8px",textAlign:"right",fontWeight:700,color:"#10b981",fontSize:11}}>{Math.round(grandTotal+predictedTotal).toLocaleString("cs-CZ")} Kč</td>
+              {months.map(({year,month},i) => {
+                const key = `${year}-${month}`;
+                const paid = monthTotals[key]||0;
+                const pred = allTickers.reduce((s,tk)=>s+(predicted[tk]?.[key]||0),0);
+                const total = paid + pred;
+                const st = monthStatus(year,month);
+                return (
+                  <td key={i} style={{padding:"5px 8px",textAlign:"center",fontWeight:600,fontSize:11,
+                    color:paid>0?"#10b981":pred>0?"#3b82f6":textMuted,
+                    borderLeft:`1px solid ${border}`}}>
+                    {total>0 ? Math.round(total).toLocaleString("cs-CZ") : "–"}
+                  </td>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {allTickers.map((ticker, ti) => {
+              // Per-ticker total
+              const tickerTotal = divTx.filter(t=>t.ticker===ticker).reduce((s,t)=>s+getAmt(t),0)
+                + Object.values(predicted[ticker]||{}).reduce((s,v)=>s+v,0);
+              const currency = divTx.find(t=>t.ticker===ticker)?.currency||"USD";
+              return (
+                <tr key={ticker} style={{borderBottom:`1px solid ${border}`,background:ti%2===0?"transparent":(darkMode?"#0a0f1e22":"#f8fafc")}}>
+                  {/* Ticker */}
+                  <td style={{padding:"5px 8px",fontWeight:700,color:"#6366f1",fontSize:11,position:"sticky",left:0,background:ti%2===0?(darkMode?"#161d30":"#eef2f9"):(darkMode?"#0f1626":"#f1f5f9"),zIndex:1}}>
+                    <div style={{color:"#6366f1"}}>{ticker}</div>
+                    <div style={{fontSize:9,color:textMuted,fontWeight:400}}>{(tickerNames[ticker]||ticker).slice(0,14)}</div>
+                  </td>
+                  {/* Ticker total */}
+                  <td style={{padding:"5px 8px",textAlign:"right",fontSize:11,fontWeight:600,color:textPrimary}}>
+                    {Math.round(tickerTotal).toLocaleString("cs-CZ")} Kč
+                  </td>
+                  {/* Per-month cells */}
+                  {months.map(({year,month},i) => {
+                    const key = `${year}-${month}`;
+                    const paidAmt = lookup[ticker]?.[key];
+                    const predAmt = predicted[ticker]?.[key];
+                    const st = monthStatus(year,month);
+                    const hasPaid = !!paidAmt;
+                    const hasPred = !!predAmt;
+                    const displayAmt = paidAmt || predAmt;
+                    const isCZK = currency==="CZK";
+                    return (
+                      <td key={i} style={{padding:"4px 6px",textAlign:"center",fontSize:10,
+                        background:cellBg(st,hasPaid,hasPred),
+                        color:cellColor(hasPaid,hasPred,st),
+                        fontWeight:hasPaid||hasPred?600:400,
+                        borderLeft:`1px solid ${border}`,
+                        borderRadius:4}}>
+                        {displayAmt
+                          ? (isCZK
+                              ? `Kč${Math.round(displayAmt).toLocaleString("cs-CZ")}`
+                              : `${Math.round(displayAmt).toLocaleString("cs-CZ")} Kč`)
+                          : <span style={{color:border}}>–</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+          {/* Bottom total row */}
+          <tfoot>
+            <tr style={{background:darkMode?"#0d1220":"#f1f5f9",borderTop:`2px solid ${border}`}}>
+              <td style={{padding:"5px 8px",fontWeight:700,color:textPrimary,fontSize:11,position:"sticky",left:0,background:darkMode?"#0d1220":"#f1f5f9",zIndex:2}}>Total:</td>
+              <td style={{padding:"5px 8px",textAlign:"right",fontWeight:700,color:"#10b981",fontSize:11}}>{Math.round(grandTotal+predictedTotal).toLocaleString("cs-CZ")} Kč</td>
+              {months.map(({year,month},i) => {
+                const key = `${year}-${month}`;
+                const paid = monthTotals[key]||0;
+                const pred = allTickers.reduce((s,tk)=>s+(predicted[tk]?.[key]||0),0);
+                const total = paid+pred;
+                return (
+                  <td key={i} style={{padding:"5px 8px",textAlign:"center",fontWeight:700,fontSize:11,
+                    color:paid>0?"#10b981":pred>0?"#3b82f6":textMuted,borderLeft:`1px solid ${border}`}}>
+                    {total>0?Math.round(total).toLocaleString("cs-CZ"):"–"}
+                  </td>
+                );
+              })}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {/* Upcoming section */}
+      {(() => {
+        const upcoming = [];
+        allTickers.forEach(ticker => {
+          const txs = divTx.filter(t=>t.ticker===ticker).sort((a,b)=>new Date(a.date)-new Date(b.date));
+          if (!txs.length) return;
+          // Find next predicted payment
+          Object.entries(predicted[ticker]||{}).forEach(([key,amt]) => {
+            const [y,m] = key.split("-").map(Number);
+            const d = new Date(y,m,15); // mid-month estimate
+            if (d >= now) upcoming.push({ticker, name:tickerNames[ticker]||ticker, date:d, amount:amt, currency:txs[0]?.currency||"USD"});
+          });
+        });
+        upcoming.sort((a,b)=>a.date-b.date);
+        if (!upcoming.length) return null;
+        return (
+          <div style={{marginTop:16}}>
+            <div style={{fontSize:12,fontWeight:700,color:textPrimary,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.08em"}}>Upcoming Dividends</div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+              <thead><tr>
+                {["Ex-dividend date","Stock","Amount (est.)"].map(h=>(
+                  <th key={h} style={{textAlign:"left",padding:"6px 10px",color:textMuted,fontSize:10,textTransform:"uppercase",borderBottom:`1px solid ${border}`}}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {upcoming.slice(0,8).map((u,i)=>(
+                  <tr key={i} style={{borderBottom:`1px solid ${border}`}}>
+                    <td style={{padding:"6px 10px",color:textSec}}>{u.date.toLocaleDateString("cs-CZ")}</td>
+                    <td style={{padding:"6px 10px"}}>
+                      <span style={{fontWeight:700,color:"#6366f1"}}>{u.ticker}</span>
+                      <span style={{color:textMuted,marginLeft:6}}>{u.name.slice(0,30)}</span>
+                    </td>
+                    <td style={{padding:"6px 10px",fontWeight:600,color:"#3b82f6"}}>~{Math.round(u.amount).toLocaleString("cs-CZ")} Kč</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+
 // ─── DIGRIN-STYLE DIVIDEND CHART ─────────────────────────────────────────────
 function DigrínDividendChart({ transactions, rates, tickerNames, S, textMuted, textPrimary, border, bgCard, accent, lang }) {
   const [mode, setMode] = useState("quarterly"); // quarterly | yearly | monthly | bystock
@@ -4919,6 +5211,14 @@ export default function App() {
               tickerNames={{...tickerNames,...KNOWN_NAMES}}
               S={S} textMuted={textMuted} textPrimary={textPrimary}
               border={border} bgCard={bgCard} accent={accent} lang={lang}
+            />
+
+            <DigrinCalendar
+              transactions={activeTransactions}
+              rates={rates}
+              tickerNames={{...tickerNames,...KNOWN_NAMES}}
+              S={S} textMuted={textMuted} textPrimary={textPrimary} textSec={textSec}
+              border={border} bgCard={bgCard} darkMode={darkMode} lang={lang}
             />
 
             {/* Monthly calendar */}
