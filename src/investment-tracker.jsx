@@ -1163,9 +1163,34 @@ function TipyTab({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, bo
     setLoadingTips(true); setErrorMsg(""); setTips(null); setSelectedTip(null); setReport(null);
     try {
       const sLabel = SECTORS.find(s=>s[0]===sector)?.[1]||"všechny sektory";
-      const prompt = `Dnešní datum: ${new Date().toLocaleDateString("cs-CZ")}. Jsi zkušený investiční analytik. Vyber 8 podhodnocených akcií${sector!=="all"?" ze sektoru "+sLabel:""} s margin of safety a silnými fundamenty. Vrať POUZE čistý JSON (bez markdown, bez textu):
+      const prompt = `Dnešní datum: ${new Date().toLocaleDateString("cs-CZ")}. Jsi zkušený investiční analytik. Vyber 8 podhodnocených akcií${sector!=="all"?" ze sektoru "+sLabel:""} s margin of safety a silnými fundamenty. DŮLEŽITÉ: pole currentPrice nech na 0 - bude nahrazeno živou cenou. Zaměř se na správné fairValue (DCF/Graham), investiční tezi a katalyzátory. Vrať POUZE čistý JSON (bez markdown, bez textu):
 {"updated":"${new Date().toLocaleDateString("cs-CZ")}","tips":[{"ticker":"AAPL","name":"Apple Inc.","sector":"Technologie","currency":"USD","currentPrice":185.5,"fairValue":230.0,"upside":24.0,"rating":"Silný nákup","thesis":"Investiční teze 2-3 věty.","risks":"Hlavní rizika.","pe":28.5,"peVsAvg":"pod 5letým průměrem 31x","analystBuy":35,"analystHold":10,"analystSell":2,"analystTarget":220.0,"revenueGrowth":8.5,"epsGrowth":12.3,"roe":147.0,"debtToEquity":1.8,"dividendYield":0.5,"catalysts":["Katalyzátor 1","Katalyzátor 2"]}]}`;
       const data = await callClaude(prompt, 3000);
+      // Fetch real prices and overwrite AI-generated prices
+      try {
+        const tickers = (data.tips||[]).map(t=>t.ticker).filter(Boolean);
+        if (tickers.length) {
+          const pr = await fetch("/api/prices", {
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({tickers})
+          });
+          if (pr.ok) {
+            const prData = await pr.json();
+            if (prData.prices) {
+              data.tips = (data.tips||[]).map(t => {
+                const live = prData.prices[t.ticker];
+                if (live?.price) {
+                  const realPrice = live.price;
+                  // Recalculate upside based on real price
+                  const upside = t.fairValue ? ((t.fairValue - realPrice) / realPrice * 100) : t.upside;
+                  return {...t, currentPrice: realPrice, upside: parseFloat(upside.toFixed(1))};
+                }
+                return t;
+              });
+            }
+          }
+        }
+      } catch(e) { /* live prices optional, ignore errors */ }
       setTips(data);
     } catch(e) { setErrorMsg("Chyba: "+e.message); }
     setLoadingTips(false);
