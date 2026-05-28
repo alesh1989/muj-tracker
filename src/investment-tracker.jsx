@@ -1133,6 +1133,501 @@ function CsvImportModal({ onClose, onImport, S }) {
 }
 
 
+
+// ─── TIPY TAB ────────────────────────────────────────────────────────────────
+const TipyTab = ({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, border, bgCard }) => {
+  const [tips, setTips] = React.useState(null);
+  const [loadingTips, setLoadingTips] = React.useState(false);
+  const [selectedTip, setSelectedTip] = React.useState(null);
+  const [report, setReport] = React.useState(null);
+  const [loadingReport, setLoadingReport] = React.useState(false);
+  const [sector, setSector] = React.useState("all");
+  const [errorMsg, setErrorMsg] = React.useState("");
+
+  const SECTORS = [
+    ["all","Vše"],["tech","Technologie"],["finance","Finance"],["health","Zdravotnictví"],
+    ["energy","Energie"],["consumer","Spotřební zboží"],["industrial","Průmysl"],["reit","REIT"],
+  ];
+
+  const fetchTips = async () => {
+    setLoadingTips(true); setErrorMsg(""); setTips(null); setSelectedTip(null); setReport(null);
+    try {
+      const sectorLabel = SECTORS.find(s=>s[0]===sector)?.[1]||"všechny sektory";
+      const resp = await fetch("/api/claude", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model:"claude-sonnet-4-5", max_tokens:3000,
+          messages:[{role:"user", content:`Dnešní datum: ${new Date().toLocaleDateString("cs-CZ")}. Jsi zkušený analytik akcií. Vyber 8 nejzajímavějších podhodnocených akcií${sector!=="all"?" ze sektoru "+sectorLabel:""} vhodných pro dlouhodobé držení. Zaměř se na akcie s margin of safety, silnými fundamenty a katalyzátory růstu. Vrať POUZE čistý JSON bez markdown:
+{
+  "updated": "datum",
+  "tips": [
+    {
+      "ticker": "AAPL",
+      "name": "Apple Inc.",
+      "sector": "Technologie",
+      "currency": "USD",
+      "currentPrice": 185.5,
+      "fairValue": 230.0,
+      "upside": 24.0,
+      "rating": "Silný nákup",
+      "ratingColor": "#10b981",
+      "moat": "Silný brand, ekosystém, switching costs",
+      "thesis": "2-3 věty proč je akcie podhodnocená a proč ji koupit",
+      "risks": "1-2 hlavní rizika",
+      "pe": 28.5,
+      "peVsAvg": "pod 5letým průměrem 31x",
+      "pbRatio": 45.2,
+      "dcfValue": 245.0,
+      "grahamValue": 180.0,
+      "analystTarget": 220.0,
+      "analystBuy": 85,
+      "analystHold": 12,
+      "analystSell": 3,
+      "revenueGrowth": 8.5,
+      "epsGrowth": 12.3,
+      "roe": 147.0,
+      "debtToEquity": 1.8,
+      "dividendYield": 0.5,
+      "catalysts": ["Nový produkt", "Zpětné odkupy", "AI integrace"]
+    }
+  ]
+}`}]
+        })
+      });
+      const json = await resp.json();
+      const text = json.content?.[0]?.text||"";
+      const parsed = JSON.parse(text.replace(/\`\`\`json|\`\`\`/g,"").trim());
+      setTips(parsed);
+    } catch(e) { setErrorMsg("Chyba: "+e.message); }
+    setLoadingTips(false);
+  };
+
+  const fetchReport = async (tip) => {
+    setLoadingReport(true); setReport(null); setSelectedTip(tip);
+    try {
+      const resp = await fetch("/api/claude", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model:"claude-sonnet-4-5", max_tokens:4000,
+          messages:[{role:"user", content:`Dnešní datum: ${new Date().toLocaleDateString("cs-CZ")}. Vytvoř kompletní investiční analýzu pro ${tip.ticker} (${tip.name}). Vrať POUZE čistý JSON:
+{
+  "ticker":"${tip.ticker}","name":"${tip.name}","date":"${new Date().toLocaleDateString("cs-CZ")}",
+  "companyOverview":"3-4 věty o firmě, byznys modelu a pozici na trhu",
+  "investmentThesis":"Proč koupit - 4-5 vět s konkrétními argumenty",
+  "fundamentals":{
+    "revenue5y":[čísla v mld za posledních 5 let],
+    "netIncome5y":[čísla v mld],
+    "fcf5y":[čísla v mld],
+    "eps5y":[čísla],
+    "years5y":["2020","2021","2022","2023","2024"],
+    "revenueGrowthCagr":číslo,
+    "grossMargin":číslo,
+    "operatingMargin":číslo,
+    "netMargin":číslo,
+    "roe":číslo,"roa":číslo,"roic":číslo,
+    "currentRatio":číslo,"quickRatio":číslo,
+    "debtToEquity":číslo,"interestCoverage":číslo,
+    "altmanZ":číslo
+  },
+  "valuation":{
+    "currentPrice":číslo,"currency":"USD",
+    "dcfBase":číslo,"dcfBull":číslo,"dcfBear":číslo,"dcfAssumptions":"2 věty o předpokladech DCF",
+    "grahamValue":číslo,"grahamFormula":"vysvětlení",
+    "buffettValue":číslo,"buffettMethod":"owner earnings přístup",
+    "peRatio":číslo,"peVsHistorical":"srovnání s historií",
+    "pbRatio":číslo,"psRatio":číslo,"evEbitda":číslo,"evEbitdaVsSector":"srovnání",
+    "peg":číslo,"fairValueRange":"od X do Y USD",
+    "marginOfSafety":číslo
+  },
+  "technical":{
+    "trend":"Uptend/Downtrend/Sideways",
+    "support":číslo,"resistance":číslo,
+    "rsi":číslo,"rsiComment":"komentář",
+    "ma50":číslo,"ma200":číslo,"goldenCross":true/false,
+    "technicalRating":"Bullish/Neutral/Bearish",
+    "technicalComment":"2 věty"
+  },
+  "earnings":[
+    {"quarter":"Q4 2024","eps":číslo,"epsEstimate":číslo,"beat":true,"revenue":číslo,"revenueEstimate":číslo,"comment":"1 věta"},
+    {"quarter":"Q3 2024","eps":číslo,"epsEstimate":číslo,"beat":true,"revenue":číslo,"revenueEstimate":číslo,"comment":"1 věta"},
+    {"quarter":"Q2 2024","eps":číslo,"epsEstimate":číslo,"beat":false,"revenue":číslo,"revenueEstimate":číslo,"comment":"1 věta"},
+    {"quarter":"Q1 2024","eps":číslo,"epsEstimate":číslo,"beat":true,"revenue":číslo,"revenueEstimate":číslo,"comment":"1 věta"}
+  ],
+  "analysts":{"avgTarget":číslo,"highTarget":číslo,"lowTarget":číslo,"buy":číslo,"hold":číslo,"sell":číslo,"consensus":"Strong Buy/Buy/Hold/Sell","recentUpgrades":["Banka: Upgrade na Buy, cíl $X","Banka2: Zvýšení cíle na $Y"]},
+  "catalysts":["Katalyzátor 1","Katalyzátor 2","Katalyzátor 3","Katalyzátor 4"],
+  "risks":["Riziko 1","Riziko 2","Riziko 3"],
+  "prediction":{
+    "target12m":číslo,"target24m":číslo,"target36m":číslo,
+    "bull12m":číslo,"base12m":číslo,"bear12m":číslo,
+    "comment":"2-3 věty o výhledu"
+  },
+  "balanceSheet":{
+    "totalAssets":číslo,"totalLiabilities":číslo,"equity":číslo,
+    "cash":číslo,"totalDebt":číslo,"netDebt":číslo,
+    "comment":"2 věty o finanční situaci"
+  },
+  "conclusion":"Závěrečné shrnutí 3-4 věty s konkrétním doporučením a price targetem"
+}`}]
+        })
+      });
+      const json = await resp.json();
+      const text = json.content?.[0]?.text||"";
+      const parsed = JSON.parse(text.replace(/\`\`\`json|\`\`\`/g,"").trim());
+      setReport(parsed);
+    } catch(e) { setErrorMsg("Chyba reportu: "+e.message); }
+    setLoadingReport(false);
+  };
+
+  const downloadReport = (r) => {
+    const fmt2=(n,dec=1)=>n!=null&&!isNaN(n)?n.toFixed(dec):"–";
+    const fmtP=(n)=>n!=null&&!isNaN(n)?n.toFixed(1)+"%":"–";
+    const cur=r.valuation?.currency||"USD";
+    const html = `<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8">
+<title>Investiční analýza — ${r.ticker}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#0d1117;color:#e2e8f0;padding:32px;max-width:900px;margin:auto}
+  h1{font-size:28px;font-weight:800;color:#fff;margin-bottom:4px}
+  .subtitle{color:#64748b;font-size:13px;margin-bottom:28px}
+  h2{font-size:16px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.1em;margin:28px 0 12px;padding-bottom:6px;border-bottom:1px solid #1e293b}
+  h3{font-size:13px;font-weight:700;color:#7c93b8;margin:16px 0 8px}
+  p{font-size:13px;line-height:1.7;color:#cbd5e1;margin-bottom:8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px}
+  .grid4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:12px}
+  .card{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px}
+  .label{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+  .val{font-size:18px;font-weight:700;color:#f1f5f9}
+  .val-sm{font-size:14px;font-weight:600;color:#f1f5f9}
+  .green{color:#10b981}.red{color:#f87171}.yellow{color:#f59e0b}.blue{color:#60a5fa}.purple{color:#a78bfa}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
+  .badge-green{background:#064e3b;color:#10b981}.badge-yellow{background:#451a03;color:#f59e0b}.badge-red{background:#450a0a;color:#f87171}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;padding:8px 10px;color:#64748b;font-size:10px;text-transform:uppercase;border-bottom:1px solid #1e293b}
+  td{padding:8px 10px;border-bottom:1px solid #0f1a2e;color:#cbd5e1}
+  tr:last-child td{border-bottom:none}
+  .beat{color:#10b981;font-weight:700}.miss{color:#f87171;font-weight:700}
+  ul{padding-left:18px;margin:6px 0}
+  li{font-size:13px;color:#cbd5e1;margin-bottom:4px;line-height:1.6}
+  .footer{margin-top:40px;padding-top:16px;border-top:1px solid #1e293b;font-size:10px;color:#475569;text-align:center}
+  .bar-wrap{background:#1e293b;border-radius:4px;height:8px;margin-top:4px}
+  .bar{height:8px;border-radius:4px;background:linear-gradient(90deg,#4f46e5,#7c3aed)}
+</style></head><body>
+<h1>${r.ticker} — ${r.name}</h1>
+<div class="subtitle">Investiční analýza · ${r.date} · InvestTrack AI</div>
+
+<h2>📋 O společnosti</h2>
+<p>${r.companyOverview}</p>
+
+<h2>💡 Investiční teze</h2>
+<p>${r.investmentThesis}</p>
+
+<h2>💰 Ocenění</h2>
+<div class="grid4">
+  <div class="card"><div class="label">Aktuální cena</div><div class="val">${fmt2(r.valuation?.currentPrice)} ${cur}</div></div>
+  <div class="card"><div class="label">DCF (base)</div><div class="val green">${fmt2(r.valuation?.dcfBase)} ${cur}</div></div>
+  <div class="card"><div class="label">Graham</div><div class="val blue">${fmt2(r.valuation?.grahamValue)} ${cur}</div></div>
+  <div class="card"><div class="label">Buffett</div><div class="val purple">${fmt2(r.valuation?.buffettValue)} ${cur}</div></div>
+</div>
+<div class="grid4">
+  <div class="card"><div class="label">P/E</div><div class="val-sm">${fmt2(r.valuation?.peRatio)}x</div><div style="font-size:10px;color:#64748b;margin-top:2px">${r.valuation?.peVsHistorical||""}</div></div>
+  <div class="card"><div class="label">EV/EBITDA</div><div class="val-sm">${fmt2(r.valuation?.evEbitda)}x</div><div style="font-size:10px;color:#64748b;margin-top:2px">${r.valuation?.evEbitdaVsSector||""}</div></div>
+  <div class="card"><div class="label">P/B</div><div class="val-sm">${fmt2(r.valuation?.pbRatio)}x</div></div>
+  <div class="card"><div class="label">Margin of Safety</div><div class="val-sm green">${fmtP(r.valuation?.marginOfSafety)}</div></div>
+</div>
+<div class="grid3">
+  <div class="card"><div class="label">DCF Bull/Base/Bear</div><div class="val-sm">${fmt2(r.valuation?.dcfBull)} / ${fmt2(r.valuation?.dcfBase)} / ${fmt2(r.valuation?.dcfBear)} ${cur}</div></div>
+  <div class="card"><div class="label">Fair value rozsah</div><div class="val-sm green">${r.valuation?.fairValueRange||"–"}</div></div>
+  <div class="card"><div class="label">PEG ratio</div><div class="val-sm">${fmt2(r.valuation?.peg)}</div></div>
+</div>
+<p style="font-size:11px;color:#64748b"><b>DCF předpoklady:</b> ${r.valuation?.dcfAssumptions||""}</p>
+
+<h2>📊 Fundamentální data (5 let)</h2>
+<table><thead><tr><th>Rok</th>${(r.fundamentals?.years5y||[]).map(y=>`<th>${y}</th>`).join("")}</tr></thead><tbody>
+<tr><td>Tržby (mld)</td>${(r.fundamentals?.revenue5y||[]).map(v=>`<td>${fmt2(v)}</td>`).join("")}</tr>
+<tr><td>Čistý zisk (mld)</td>${(r.fundamentals?.netIncome5y||[]).map(v=>`<td class="${v>=0?"green":"red"}">${fmt2(v)}</td>`).join("")}</tr>
+<tr><td>FCF (mld)</td>${(r.fundamentals?.fcf5y||[]).map(v=>`<td class="${v>=0?"green":"red"}">${fmt2(v)}</td>`).join("")}</tr>
+<tr><td>EPS</td>${(r.fundamentals?.eps5y||[]).map(v=>`<td>${fmt2(v)}</td>`).join("")}</tr>
+</tbody></table>
+
+<h3>Marže & Rentabilita</h3>
+<div class="grid4">
+  <div class="card"><div class="label">Hrubá marže</div><div class="val-sm">${fmtP(r.fundamentals?.grossMargin)}</div></div>
+  <div class="card"><div class="label">Provozní marže</div><div class="val-sm">${fmtP(r.fundamentals?.operatingMargin)}</div></div>
+  <div class="card"><div class="label">Čistá marže</div><div class="val-sm">${fmtP(r.fundamentals?.netMargin)}</div></div>
+  <div class="card"><div class="label">ROE / ROA / ROIC</div><div class="val-sm">${fmtP(r.fundamentals?.roe)} / ${fmtP(r.fundamentals?.roa)} / ${fmtP(r.fundamentals?.roic)}</div></div>
+</div>
+
+<h3>Finanční zdraví</h3>
+<div class="grid4">
+  <div class="card"><div class="label">Current Ratio</div><div class="val-sm ${(r.fundamentals?.currentRatio||0)>=1.5?"green":(r.fundamentals?.currentRatio||0)>=1?"yellow":"red"}">${fmt2(r.fundamentals?.currentRatio)}</div></div>
+  <div class="card"><div class="label">Debt/Equity</div><div class="val-sm ${(r.fundamentals?.debtToEquity||0)<=1?"green":(r.fundamentals?.debtToEquity||0)<=2?"yellow":"red"}">${fmt2(r.fundamentals?.debtToEquity)}</div></div>
+  <div class="card"><div class="label">Interest Coverage</div><div class="val-sm">${fmt2(r.fundamentals?.interestCoverage)}x</div></div>
+  <div class="card"><div class="label">Altman Z-score</div><div class="val-sm ${(r.fundamentals?.altmanZ||0)>=2.99?"green":(r.fundamentals?.altmanZ||0)>=1.81?"yellow":"red"}">${fmt2(r.fundamentals?.altmanZ)}</div></div>
+</div>
+
+<h2>🏦 Rozvaha</h2>
+<div class="grid3">
+  <div class="card"><div class="label">Celková aktiva (mld)</div><div class="val-sm">${fmt2(r.balanceSheet?.totalAssets)}</div></div>
+  <div class="card"><div class="label">Dluh celkem (mld)</div><div class="val-sm red">${fmt2(r.balanceSheet?.totalDebt)}</div></div>
+  <div class="card"><div class="label">Cash (mld)</div><div class="val-sm green">${fmt2(r.balanceSheet?.cash)}</div></div>
+</div>
+<p>${r.balanceSheet?.comment||""}</p>
+
+<h2>📈 Technická analýza</h2>
+<div class="grid4">
+  <div class="card"><div class="label">Trend</div><div class="val-sm ${r.technical?.trend==="Uptrend"?"green":r.technical?.trend==="Downtrend"?"red":"yellow"}">${r.technical?.trend||"–"}</div></div>
+  <div class="card"><div class="label">RSI (14)</div><div class="val-sm ${(r.technical?.rsi||50)<30?"green":(r.technical?.rsi||50)>70?"red":"yellow"}">${fmt2(r.technical?.rsi,0)}</div></div>
+  <div class="card"><div class="label">MA50 / MA200</div><div class="val-sm">${fmt2(r.technical?.ma50)} / ${fmt2(r.technical?.ma200)}</div></div>
+  <div class="card"><div class="label">Golden Cross</div><div class="val-sm ${r.technical?.goldenCross?"green":"red"}">${r.technical?.goldenCross?"✓ Ano":"✗ Ne"}</div></div>
+</div>
+<div class="grid2">
+  <div class="card"><div class="label">Support / Resistance</div><div class="val-sm">${fmt2(r.technical?.support)} ${cur} / ${fmt2(r.technical?.resistance)} ${cur}</div></div>
+  <div class="card"><div class="label">Technické hodnocení</div><div class="val-sm ${r.technical?.technicalRating==="Bullish"?"green":r.technical?.technicalRating==="Bearish"?"red":"yellow"}">${r.technical?.technicalRating||"–"}</div></div>
+</div>
+<p>${r.technical?.technicalComment||""}</p>
+
+<h2>📣 Poslední výsledky (Earnings)</h2>
+<table><thead><tr><th>Čtvrtletí</th><th>EPS</th><th>Odhad EPS</th><th>Beat?</th><th>Tržby (mld)</th><th>Odhad (mld)</th><th>Komentář</th></tr></thead><tbody>
+${(r.earnings||[]).map(e=>`<tr><td>${e.quarter}</td><td>${fmt2(e.eps)}</td><td>${fmt2(e.epsEstimate)}</td><td class="${e.beat?"beat":"miss"}">${e.beat?"✓ Beat":"✗ Miss"}</td><td>${fmt2(e.revenue)}</td><td>${fmt2(e.revenueEstimate)}</td><td style="font-size:11px">${e.comment||""}</td></tr>`).join("")}
+</tbody></table>
+
+<h2>👨‍💼 Analytici</h2>
+<div class="grid4">
+  <div class="card"><div class="label">Konsensus</div><div class="val-sm green">${r.analysts?.consensus||"–"}</div></div>
+  <div class="card"><div class="label">Průměrný target</div><div class="val-sm">${fmt2(r.analysts?.avgTarget)} ${cur}</div></div>
+  <div class="card"><div class="label">High / Low target</div><div class="val-sm">${fmt2(r.analysts?.highTarget)} / ${fmt2(r.analysts?.lowTarget)} ${cur}</div></div>
+  <div class="card"><div class="label">Buy / Hold / Sell</div><div class="val-sm"><span class="green">${r.analysts?.buy||0}</span> / <span class="yellow">${r.analysts?.hold||0}</span> / <span class="red">${r.analysts?.sell||0}</span></div></div>
+</div>
+${r.analysts?.recentUpgrades?.length?`<h3>Nedávné změny doporučení</h3><ul>${r.analysts.recentUpgrades.map(u=>`<li>${u}</li>`).join("")}</ul>`:""}
+
+<h2>🚀 Katalyzátory & Rizika</h2>
+<div class="grid2">
+  <div><h3 class="green">Katalyzátory růstu</h3><ul>${(r.catalysts||[]).map(c=>`<li>${c}</li>`).join("")}</ul></div>
+  <div><h3 class="red">Rizika</h3><ul>${(r.risks||[]).map(c=>`<li>${c}</li>`).join("")}</ul></div>
+</div>
+
+<h2>🔮 Predikce vývoje</h2>
+<div class="grid3">
+  <div class="card"><div class="label">Cíl 12 měsíců</div><div class="val green">${fmt2(r.prediction?.target12m)} ${cur}</div><div style="font-size:10px;color:#64748b;margin-top:4px">Bull: ${fmt2(r.prediction?.bull12m)} · Base: ${fmt2(r.prediction?.base12m)} · Bear: ${fmt2(r.prediction?.bear12m)}</div></div>
+  <div class="card"><div class="label">Cíl 24 měsíců</div><div class="val green">${fmt2(r.prediction?.target24m)} ${cur}</div></div>
+  <div class="card"><div class="label">Cíl 36 měsíců</div><div class="val green">${fmt2(r.prediction?.target36m)} ${cur}</div></div>
+</div>
+<p>${r.prediction?.comment||""}</p>
+
+<h2>✅ Závěr</h2>
+<div class="card" style="border-color:#4f46e5"><p style="font-size:14px;line-height:1.8">${r.conclusion}</p></div>
+
+<div class="footer">Analýza vygenerována pomocí InvestTrack AI · ${r.date} · Pouze pro informační účely, není investičním doporučením.</div>
+</body></html>`;
+    const blob = new Blob([html], {type:"text/html"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `analyza-${r.ticker}-${new Date().toISOString().slice(0,10)}.html`;
+    a.click();
+  };
+
+  const upColor = (pct) => pct>=20?"#10b981":pct>=10?"#22d3a0":pct>=0?"#f59e0b":"#f87171";
+  const ratingBg = (r) => r==="Silný nákup"?"#064e3b":r==="Nákup"?"#052e16":r==="Držet"?"#451a03":"#450a0a";
+  const ratingFg = (r) => r==="Silný nákup"?"#10b981":r==="Nákup"?"#34d399":r==="Držet"?"#f59e0b":"#f87171";
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18,flexWrap:"wrap",gap:10}}>
+        <div>
+          <div style={{fontSize:18,fontWeight:800,color:textPrimary}}>💡 Tipy na podhodnocené akcie</div>
+          <div style={{fontSize:12,color:textMuted,marginTop:2}}>AI analýza · Vyberte sektor a nechte vygenerovat aktuální tipy</div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <select value={sector} onChange={e=>setSector(e.target.value)} style={S.select}>
+            {SECTORS.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+          </select>
+          <button style={{...S.btn("primary"),padding:"9px 20px",fontWeight:700}} onClick={fetchTips} disabled={loadingTips}>
+            {loadingTips?"⏳ Analyzuji...":"🔍 Najít tipy"}
+          </button>
+        </div>
+      </div>
+
+      {errorMsg&&<div style={{color:"#f87171",fontSize:12,marginBottom:12,padding:"8px 12px",background:"#450a0a",borderRadius:8}}>{errorMsg}</div>}
+
+      {!tips&&!loadingTips&&(
+        <div style={{...S.card,textAlign:"center",padding:48}}>
+          <div style={{fontSize:40,marginBottom:12}}>🔍</div>
+          <div style={{fontSize:15,fontWeight:700,color:textPrimary,marginBottom:8}}>Najít podhodnocené akcie</div>
+          <div style={{fontSize:12,color:textMuted,maxWidth:400,margin:"0 auto"}}>
+            Vyberte sektor a klikněte na "Najít tipy". AI prohledá trh a vybere 8 nejzajímavějších akcií s potenciálem růstu, silnými fundamenty a margin of safety.
+          </div>
+        </div>
+      )}
+
+      {loadingTips&&(
+        <div style={{...S.card,textAlign:"center",padding:48}}>
+          <div style={{fontSize:32,marginBottom:12,animation:"spin 1s linear infinite"}}>⏳</div>
+          <div style={{color:textMuted,fontSize:13}}>AI analyzuje trh a hledá podhodnocené akcie...</div>
+        </div>
+      )}
+
+      {tips&&(
+        <>
+          <div style={{fontSize:11,color:textMuted,marginBottom:14}}>Aktualizováno: {tips.updated} · {tips.tips?.length} tipů nalezeno</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:14,marginBottom:24}}>
+            {(tips.tips||[]).map((tip,i)=>(
+              <div key={i} style={{...S.card,cursor:"pointer",border:`1px solid ${selectedTip?.ticker===tip.ticker?"#6366f1":border}`,transition:"border-color .2s"}}
+                onClick={()=>selectedTip?.ticker===tip.ticker?setSelectedTip(null):setSelectedTip(tip)}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                  <div>
+                    <div style={{fontSize:16,fontWeight:800,color:textPrimary}}>{tip.ticker}</div>
+                    <div style={{fontSize:11,color:textMuted}}>{tip.name} · {tip.sector}</div>
+                  </div>
+                  <span style={{background:ratingBg(tip.rating),color:ratingFg(tip.rating),padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>{tip.rating}</span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                  <div style={{background:darkMode?"#0a0f1e":"#f1f5f9",borderRadius:8,padding:"8px 10px"}}>
+                    <div style={{fontSize:9,color:textMuted,textTransform:"uppercase"}}>Cena</div>
+                    <div style={{fontSize:14,fontWeight:700,color:textPrimary}}>{tip.currentPrice} {tip.currency}</div>
+                  </div>
+                  <div style={{background:darkMode?"#0a0f1e":"#f1f5f9",borderRadius:8,padding:"8px 10px"}}>
+                    <div style={{fontSize:9,color:textMuted,textTransform:"uppercase"}}>Fair Value</div>
+                    <div style={{fontSize:14,fontWeight:700,color:"#10b981"}}>{tip.fairValue} {tip.currency}</div>
+                  </div>
+                  <div style={{background:darkMode?"#0a0f1e":"#f1f5f9",borderRadius:8,padding:"8px 10px"}}>
+                    <div style={{fontSize:9,color:textMuted,textTransform:"uppercase"}}>Upside</div>
+                    <div style={{fontSize:14,fontWeight:700,color:upColor(tip.upside)}}>+{tip.upside?.toFixed(1)}%</div>
+                  </div>
+                </div>
+                <div style={{fontSize:12,color:textSec,lineHeight:1.6,marginBottom:8}}>{tip.thesis}</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+                  {(tip.catalysts||[]).slice(0,3).map((c,j)=>(
+                    <span key={j} style={{background:darkMode?"#1e2d45":"#dbeafe",color:darkMode?"#60a5fa":"#1d4ed8",padding:"2px 8px",borderRadius:12,fontSize:10}}>{c}</span>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:`1px solid ${border}`}}>
+                  <div style={{fontSize:10,color:textMuted}}>
+                    P/E {tip.pe?.toFixed(1)} · {tip.peVsAvg} · Analytici: {tip.analystBuy}× Buy
+                  </div>
+                  <button style={{...S.btn("primary"),padding:"5px 12px",fontSize:11}}
+                    onClick={e=>{e.stopPropagation();fetchReport(tip);}}>
+                    📄 Analýza
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {loadingReport&&(
+            <div style={{...S.card,textAlign:"center",padding:36}}>
+              <div style={{color:textMuted,fontSize:13}}>⏳ Generuji detailní analýzu pro {selectedTip?.ticker}...</div>
+            </div>
+          )}
+
+          {report&&!loadingReport&&(
+            <div style={S.card}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:8}}>
+                <div>
+                  <div style={{fontSize:17,fontWeight:800,color:textPrimary}}>📄 {report.ticker} — {report.name}</div>
+                  <div style={{fontSize:11,color:textMuted}}>Detailní investiční analýza · {report.date}</div>
+                </div>
+                <button style={{...S.btn("primary"),padding:"8px 18px",fontWeight:700}} onClick={()=>downloadReport(report)}>
+                  ⬇ Stáhnout HTML
+                </button>
+              </div>
+
+              {/* Valuation summary */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:14}}>
+                {[
+                  {l:"Aktuální cena",v:`${report.valuation?.currentPrice} ${report.valuation?.currency||"USD"}`,c:"#f1f5f9"},
+                  {l:"DCF (base)",v:`${report.valuation?.dcfBase} ${report.valuation?.currency||"USD"}`,c:"#10b981"},
+                  {l:"Graham",v:`${report.valuation?.grahamValue} ${report.valuation?.currency||"USD"}`,c:"#60a5fa"},
+                  {l:"Buffett",v:`${report.valuation?.buffettValue} ${report.valuation?.currency||"USD"}`,c:"#a78bfa"},
+                  {l:"Margin of Safety",v:`${report.valuation?.marginOfSafety?.toFixed(1)}%`,c:"#22d3a0"},
+                  {l:"Analytici Target",v:`${report.analysts?.avgTarget} ${report.valuation?.currency||"USD"}`,c:"#f59e0b"},
+                ].map((s,i)=>(
+                  <div key={i} style={{background:darkMode?"#0a0f1e":"#f1f5f9",borderRadius:10,padding:"10px 12px"}}>
+                    <div style={{fontSize:9,color:textMuted,textTransform:"uppercase",marginBottom:3}}>{s.l}</div>
+                    <div style={{fontSize:14,fontWeight:700,color:s.c}}>{s.v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Conclusion */}
+              <div style={{background:darkMode?"#0a0f1e":"#f0f9ff",border:"1px solid #4f46e5",borderRadius:10,padding:14,marginBottom:14}}>
+                <div style={{fontSize:11,color:"#818cf8",fontWeight:700,marginBottom:6}}>✅ ZÁVĚR</div>
+                <div style={{fontSize:13,color:textPrimary,lineHeight:1.7}}>{report.conclusion}</div>
+              </div>
+
+              {/* Earnings */}
+              <div style={{marginBottom:14}}>
+                <div style={S.sectionTitle}>📣 Poslední výsledky</div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={S.table}>
+                    <thead><tr>
+                      {["Čtvrtletí","EPS","Odhad","Beat?","Tržby (mld)","Komentář"].map(h=><th key={h} style={S.th}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {(report.earnings||[]).map((e,i)=>(
+                        <tr key={i}>
+                          <td style={S.td}>{e.quarter}</td>
+                          <td style={S.td}>{e.eps?.toFixed(2)}</td>
+                          <td style={{...S.td,color:textMuted}}>{e.epsEstimate?.toFixed(2)}</td>
+                          <td style={{...S.td,color:e.beat?"#10b981":"#f87171",fontWeight:700}}>{e.beat?"✓ Beat":"✗ Miss"}</td>
+                          <td style={S.td}>{e.revenue?.toFixed(2)}</td>
+                          <td style={{...S.td,fontSize:11,color:textMuted}}>{e.comment}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Prediction */}
+              <div style={{marginBottom:14}}>
+                <div style={S.sectionTitle}>🔮 Predikce</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                  {[
+                    {l:"12 měsíců",base:report.prediction?.base12m,bull:report.prediction?.bull12m,bear:report.prediction?.bear12m,cur:report.valuation?.currency},
+                    {l:"24 měsíců",base:report.prediction?.target24m,cur:report.valuation?.currency},
+                    {l:"36 měsíců",base:report.prediction?.target36m,cur:report.valuation?.currency},
+                  ].map((p,i)=>(
+                    <div key={i} style={{background:darkMode?"#0a0f1e":"#f1f5f9",borderRadius:10,padding:"10px 12px"}}>
+                      <div style={{fontSize:10,color:textMuted,marginBottom:4}}>{p.l}</div>
+                      <div style={{fontSize:16,fontWeight:700,color:"#10b981"}}>{p.base} {p.cur}</div>
+                      {p.bull&&<div style={{fontSize:10,color:textMuted,marginTop:2}}>🐂 {p.bull} · 🐻 {p.bear}</div>}
+                    </div>
+                  ))}
+                </div>
+                <div style={{fontSize:12,color:textMuted,marginTop:8,lineHeight:1.6}}>{report.prediction?.comment}</div>
+              </div>
+
+              {/* Catalysts & Risks */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div>
+                  <div style={{...S.sectionTitle,color:"#10b981"}}>🚀 Katalyzátory</div>
+                  {(report.catalysts||[]).map((c,i)=>(
+                    <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:6}}>
+                      <span style={{color:"#10b981",fontWeight:700,fontSize:14}}>↑</span>
+                      <span style={{fontSize:12,color:textSec}}>{c}</span>
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div style={{...S.sectionTitle,color:"#f87171"}}>⚠ Rizika</div>
+                  {(report.risks||[]).map((r2,i)=>(
+                    <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:6}}>
+                      <span style={{color:"#f87171",fontWeight:700,fontSize:14}}>!</span>
+                      <span style={{fontSize:12,color:textSec}}>{r2}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
+
 // ─── NEWS TAB COMPONENT ───────────────────────────────────────────────────────
 function NewsTab({ portfolio, S, t=T.cs }) {
   const [news, setNews] = useState([]);
@@ -3769,8 +4264,8 @@ export default function App() {
   const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b", cash:"#22d3a0", real_estate:"#f97316" };
   const catLabel = { stock:t.stocks, etf:t.etf, crypto:t.crypto, cash:lang==="en"?"Cash":"Hotovost", real_estate:lang==="en"?"Real Estate":"Nemovitosti" };
 
-  const TABS = ["dashboard","portfolio","transakce","cashflow","dividendy","novinky","analyza","fi","dane","report","nastaveni"];
-  const TAB_LABELS = { dashboard:t.dashboard, portfolio:t.portfolio, transakce:t.transakce, cashflow:t.cashflow, dividendy:t.dividendy, novinky:t.novinky, analyza:t.analyza, fi:t.fi, dane:"🧾 Daně ČR", report:"📄 Report", nastaveni:t.nastaveni };
+  const TABS = ["dashboard","portfolio","transakce","cashflow","dividendy","novinky","analyza","tipy","fi","dane","report","nastaveni"];
+  const TAB_LABELS = { dashboard:t.dashboard, portfolio:t.portfolio, transakce:t.transakce, cashflow:t.cashflow, dividendy:t.dividendy, novinky:t.novinky, analyza:t.analyza, tipy:"💡 Tipy", fi:t.fi, dane:"🧾 Daně ČR", report:"📄 Report", nastaveni:t.nastaveni };
   const filtered = filterCat === "all" ? portfolio.positions : portfolio.positions.filter(p => p.category === filterCat);
 
   // ─── MOBILE DETECTION ────────────────────────────────────────────────────
@@ -4669,6 +5164,13 @@ export default function App() {
         {/* ─── ANALYZA ─────────────────────────────────────────────────────────── */}
         {tab === "analyza" && (
           <AnalyzaTab rates={rates} S={S} t={t} lang={lang} />
+        )}
+
+        {/* ─── TIPY ──────────────────────────────────────────────────────────────── */}
+        {tab === "tipy" && (
+          <TipyTab S={S} lang={lang} rates={rates} darkMode={darkMode}
+            textPrimary={textPrimary} textMuted={textMuted} textSec={textSec}
+            border={border} bgCard={bgCard} />
         )}
 
         {/* ─── FI ──────────────────────────────────────────────────────────────── */}
