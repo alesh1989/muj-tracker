@@ -3552,7 +3552,7 @@ export default function App() {
         }
       } else if (t.type === "dividend" && t.dividendAmount) {
         // dividendAmount is already in CZK (converted at entry time)
-        totalDividendsCZK += toCZK(t.dividendAmount||0, t.currency||"CZK", rates);
+        totalDividendsCZK += t.price>0 ? t.price : toCZK(t.dividendAmount||0, t.currency||"CZK", rates);
       } else if (t.type === "deposit") {
         // Deposits don't count as investment cost - they're cash inflows
       } else if (t.type === "withdraw") {
@@ -4473,9 +4473,9 @@ export default function App() {
                           const cc = TX_CAT_COLORS[t.category]||"#64748b";
                           const tl = TX_TYPE_LABELS[t.type]||t.type;
                           const cl = TX_CAT_LABELS[t.category]||t.category;
-                          // dividendAmount stored in CZK if auto-calculated, else convert
-                          // getDivCZK: dividendAmount is always in original currency → convert to CZK
-                          const getDivCZK=(t)=>toCZK(t.dividendAmount||0, t.currency||"USD", rates);
+                          // getDivCZK: for dividends, t.price stores the CZK value (set at save time)
+                          // Fallback: convert dividendAmount from original currency if price not set
+                          const getDivCZK=(t)=>t.price>0 ? t.price : toCZK(t.dividendAmount||0, t.currency||"USD", rates);
                           const totalCZK = t.type==="dividend"?getDivCZK(t)
                             :(t.type==="deposit"||t.type==="withdraw")?toCZK(t.amount||0,t.currency,rates)
                             :toCZK((t.quantity||0)*(t.price||0)+(t.fee||0),t.currency,rates);
@@ -5211,14 +5211,19 @@ export default function App() {
             )}
             <div style={{display:"flex",gap:8,marginTop:16}}>
               <button style={{...S.btn("primary"),flex:1,padding:"11px"}} onClick={()=>{
-                // divAmount = net dividend in ORIGINAL currency (not CZK), getDivCZK will convert at display time
-                let divAmount=parseFloat(newTx.dividendAmount)||0;
-                if(newTx.type==="dividend"&&newTx.dividendPerShare){
-                  const perShare=parseFloat(newTx.dividendPerShare)||0;
-                  const tax=parseFloat(newTx.divTax)||15;
-                  const hq=activeTransactions.filter(t=>t.type==="buy"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0)-activeTransactions.filter(t=>t.type==="sell"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0);
-                  const qty=parseFloat(newTx.quantity)||hq||1;
-                  divAmount=parseFloat((perShare*qty*(1-tax/100)).toFixed(5)); // keep in original currency
+                // Compute net dividend in ORIGINAL currency and CZK separately
+                const hqDiv=activeTransactions.filter(t=>t.type==="buy"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0)-activeTransactions.filter(t=>t.type==="sell"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0);
+                const qtyDiv=parseFloat(newTx.quantity)||hqDiv||1;
+                const perShareDiv=parseFloat(newTx.dividendPerShare)||0;
+                const taxDiv=parseFloat(newTx.divTax)||15;
+                let divAmount=0; // in original currency
+                let divAmountCZK=0; // always CZK — stored in price field
+                if(newTx.type==="dividend"&&perShareDiv){
+                  divAmount=parseFloat((perShareDiv*qtyDiv*(1-taxDiv/100)).toFixed(5));
+                  divAmountCZK=Math.round(toCZK(divAmount,newTx.currency,rates)*100)/100;
+                } else if(newTx.type==="dividend") {
+                  divAmount=parseFloat(newTx.dividendAmount)||0;
+                  divAmountCZK=Math.round(toCZK(divAmount,newTx.currency,rates)*100)/100;
                 }
                 // Check for duplicate
                 const isDup = activeTransactions.some(t =>
@@ -5228,7 +5233,9 @@ export default function App() {
                 );
                 if (isDup && !window.confirm("⚠ Zdá se, že tato transakce již existuje (stejný typ, ticker, datum, množství a cena). Opravdu přidat?")) return;
                 const tx={id:Date.now().toString(),portfolioId:activePortfolioId,...newTx,
-                  quantity:parseFloat(newTx.quantity)||0,price:parseFloat(newTx.price)||0,
+                  quantity:parseFloat(newTx.quantity)||0,
+                  // For dividends: price stores CZK value for reliable display; for others: actual price
+                  price: newTx.type==="dividend" ? divAmountCZK : (parseFloat(newTx.price)||0),
                   fee:parseFloat(newTx.fee)||0,
                   dividendAmount:divAmount, // in original currency (e.g. USD)
                   currency: newTx.currency,
