@@ -4575,7 +4575,7 @@ export default function App() {
                 <tbody>
                   {activeTransactions.filter(t=>t.type==="deposit"||t.type==="withdraw").sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>(
                     <tr key={t.id}>
-                      <td style={S.td}>{t.date}</td>
+                      <td style={S.td}>{fmtDate(t.date)}</td>
                       <td style={S.td}><span style={S.badge(t.type==="deposit"?"#22d3a0":"#f87171")}>{t.type==="deposit"?(lang==="en"?"Deposit":"Vklad"):(lang==="en"?"Withdrawal":"Výběr")}</span></td>
                       <td style={{...S.td,fontWeight:600,color:t.type==="deposit"?"#22d3a0":"#f87171"}}>{fmt(t.amount||0,t.currency,0)} {t.currency}</td>
                       <td style={{...S.td,color:textMuted}}>{t.notes||"–"}</td>
@@ -4772,16 +4772,10 @@ export default function App() {
             <div style={{fontSize:16,fontWeight:700,color:textPrimary,marginBottom:14}}>
               🧾 {lang==="en"?"Czech Tax Overview":"Daňový přehled pro ČR"}
             </div>
-
-            {/* Tax year selector */}
+            {/* Use state directly, no IIFE wrapper */}
             {(() => {
-              const taxYears = [...new Set(activeTransactions.map(t=>new Date(t.date).getFullYear()))].sort().reverse();
-              // Use the most recent year that has transactions if divCalYear has no data
-              const firstTxYear = activeTransactions.length > 0
-                ? Math.max(...activeTransactions.map(t=>new Date(t.date).getFullYear()))
-                : new Date().getFullYear();
-              const taxYear = taxYears.includes(divCalYear) ? divCalYear : (taxYears[0] || firstTxYear);
-              const setTaxYear = setDivCalYear;
+              const taxYears = [...new Set(activeTransactions.map(t=>new Date(t.date).getFullYear()))].sort((a,b)=>b-a);
+              const taxYear = taxYears.length > 0 && !taxYears.includes(divCalYear) ? taxYears[0] : divCalYear;
               const yearTx = activeTransactions.filter(t=>new Date(t.date).getFullYear()===taxYear);
 
               // Dividendy
@@ -4911,7 +4905,7 @@ export default function App() {
                             const net = toCZK(t.dividendAmount||0,t.currency||"CZK",rates);
                             return (
                               <tr key={t.id}>
-                                <td style={S.td}>{t.date}</td>
+                                <td style={S.td}>{fmtDate(t.date)}</td>
                                 <td style={S.td}><b style={{color:textPrimary}}>{t.ticker}</b></td>
                                 <td style={S.td}>{t.currency||"CZK"}</td>
                                 <td style={S.td}>{t.dividendPerShare?`${t.dividendPerShare} ${t.currency}/ks`:"–"}</td>
@@ -4942,7 +4936,7 @@ export default function App() {
                             const st = exemptStatus(s);
                             return (
                               <tr key={i}>
-                                <td style={S.td}>{s.date}</td>
+                                <td style={S.td}>{fmtDate(s.date)}</td>
                                 <td style={S.td}><b style={{color:textPrimary}}>{s.ticker}</b></td>
                                 <td style={S.td}>{s.qty}</td>
                                 <td style={S.td}>{fmt(s.revenueCZK,"CZK",0)}</td>
@@ -5193,7 +5187,13 @@ export default function App() {
                         if(known) setNewTx(p=>({...p,name:known}));
                       }
                     }):undefined}
+                    list={f.key==="ticker"?"tx-ticker-list":undefined}
                     style={S.input}/>}
+              {f.key==="ticker"&&<datalist id="tx-ticker-list">
+                {[...new Set(activeTransactions.map(t=>t.ticker).filter(Boolean))].sort().map(tk=>(
+                  <option key={tk} value={tk}/>
+                ))}
+              </datalist>}
               </div>
             ))}
             {newTx.type==="dividend"&&newTx.dividendPerShare&&(
