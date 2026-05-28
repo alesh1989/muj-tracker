@@ -4811,10 +4811,15 @@ export default function App() {
                 {(() => {
                   const cats = {};
                   portfolio.positions.forEach(p => {
-                    // Use currentValueCZK if available, otherwise cost basis
                     const val = p.currentValueCZK > 0 ? p.currentValueCZK : p.totalCostCZK;
                     cats[p.category]=(cats[p.category]||0)+val;
                   });
+                  // Cash = deposits - withdrawals - invested
+                  const totalDeposits = activeTransactions.filter(t=>t.type==="deposit").reduce((s,t)=>s+toCZK(t.amount||0,t.currency,rates),0);
+                  const totalWithdrawals = activeTransactions.filter(t=>t.type==="withdraw").reduce((s,t)=>s+toCZK(t.amount||0,t.currency,rates),0);
+                  const totalInvested = Object.values(cats).reduce((s,v)=>s+v,0);
+                  const cashBalance = Math.max(0, totalDeposits - totalWithdrawals - totalInvested);
+                  if (cashBalance > 0) cats["cash"] = (cats["cash"]||0) + cashBalance;
                   const total = Object.values(cats).reduce((s,v)=>s+v,0)||1;
                   const entries = Object.entries(cats).filter(([,v])=>v>0);
                   const rad=80,cx=120,cy=95,tw=240,th=190;
@@ -4884,6 +4889,179 @@ export default function App() {
                 })()}
               </div>
             </div>
+
+
+            {/* ── Sector Diversification Donut ─────────────────────────────────── */}
+            {(() => {
+              // Map tickers to sectors using Finnhub data + fallback map
+              const SECTOR_MAP = {
+                // Tech
+                "AAPL":"Technologie","MSFT":"Technologie","NVDA":"Technologie","GOOGL":"Technologie",
+                "META":"Technologie","AMZN":"Technologie","TSLA":"Technologie","INTC":"Technologie",
+                "AMD":"Technologie","AVGO":"Technologie","ORCL":"Technologie","CRM":"Technologie",
+                "SHOP":"Technologie","ADBE":"Technologie","QCOM":"Technologie","AMAT":"Technologie",
+                "CNDX.L":"Technologie","QQQ":"Technologie","MSTR":"Technologie","PLTR":"Technologie",
+                // Finance
+                "JPM":"Finance","BAC":"Finance","V":"Finance","MA":"Finance","GS":"Finance",
+                "MS":"Finance","BLK":"Finance","AXP":"Finance","WFC":"Finance","C":"Finance",
+                "PFLT":"Finance","BDC":"Finance","ARCC":"Finance",
+                // Healthcare
+                "JNJ":"Zdravotnictví","PFE":"Zdravotnictví","UNH":"Zdravotnictví","LLY":"Zdravotnictví",
+                "ABBV":"Zdravotnictví","MRK":"Zdravotnictví","TMO":"Zdravotnictví","ABT":"Zdravotnictví",
+                "AMGN":"Zdravotnictví","GILD":"Zdravotnictví","CVS":"Zdravotnictví","NVO":"Zdravotnictví",
+                // Consumer
+                "WMT":"Spotřební zboží","COST":"Spotřební zboží","PG":"Spotřební zboží",
+                "KO":"Spotřební zboží","PEP":"Spotřební zboží","MCD":"Spotřební zboží",
+                "SBUX":"Spotřební zboží","NKE":"Spotřební zboží","MO":"Spotřební zboží",
+                "PM":"Spotřební zboží","TSM":"Spotřební zboží","UL":"Spotřební zboží",
+                // Industrial
+                "CAT":"Průmysl","BA":"Průmysl","HON":"Průmysl","GE":"Průmysl","UPS":"Průmysl",
+                "RTX":"Průmysl","LMT":"Průmysl","DE":"Průmysl","MMM":"Průmysl",
+                // Energy
+                "XOM":"Energie","CVX":"Energie","COP":"Energie","EOG":"Energie","SLB":"Energie",
+                "NEE":"Energie","D":"Energie","DUK":"Energie","SO":"Energie",
+                // REIT
+                "O":"REIT","IRM":"REIT","SPG":"REIT","AMT":"REIT","PLD":"REIT","VTR":"REIT",
+                "NNN":"REIT","STAG":"REIT","AGNC":"REIT","MPW":"REIT",
+                // Diversified ETF
+                "SPY":"ETF – Diverzif.","QQQ":"ETF – Diverzif.","VWCE":"ETF – Diverzif.",
+                "VTI":"ETF – Diverzif.","VUAA.L":"ETF – Diverzif.","CNDX.L":"ETF – Tech.",
+                "LYP6.DE":"ETF – Diverzif.","EMIM":"ETF – Rozvíj. trhy","MEUD":"ETF – Diverzif.",
+                // Telecom
+                "T":"Telekomunikace","VZ":"Telekomunikace","TMUS":"Telekomunikace",
+                "VOD":"Telekomunikace","ORAN":"Telekomunikace",
+                // Crypto
+                "BTC":"Krypto","ETH":"Krypto","BTC-USD":"Krypto","ETH-USD":"Krypto",
+                "SOL":"Krypto","ADA":"Krypto",
+                // Czech
+                "CEZ":"Energie","CEZ.PR":"Energie","MM0":"Finance","MONET.PR":"Finance",
+                "FRA:TBK":"Spotřební zboží","KOMB.PR":"Finance","CZG.PR":"Průmysl",
+                // Airlines/Travel
+                "DAL":"Průmysl","UAL":"Průmysl","AAL":"Průmysl","RCL":"Spotřební zboží",
+                "CCL":"Spotřební zboží","NCLH":"Spotřební zboží",
+                // Communication
+                "DIS":"Komunikace","NFLX":"Komunikace","GOOGL":"Technologie","META":"Technologie",
+                "CMCSA":"Komunikace","WBD":"Komunikace","PARA":"Komunikace","STLA":"Průmysl",
+                // Materials
+                "BHP":"Materiály","RIO":"Materiály","FCX":"Materiály","NEM":"Materiály",
+                "GOLD":"Materiály","GLD":"Komodity – Zlato","IAU":"Komodity – Zlato",
+              };
+
+              const SECTOR_COLORS = {
+                "Technologie":"#6366f1","Finance":"#10b981","Zdravotnictví":"#3b82f6",
+                "Spotřební zboží":"#f59e0b","Průmysl":"#8b5cf6","Energie":"#ef4444",
+                "REIT":"#22d3a0","Komunikace":"#ec4899","Materiály":"#a78bfa",
+                "Telekomunikace":"#60a5fa","Krypto":"#f97316","Komodity – Zlato":"#fbbf24",
+                "ETF – Diverzif.":"#94a3b8","ETF – Tech.":"#818cf8","ETF – Rozvíj. trhy":"#4ade80",
+                "Nemovitosti":"#0ea5e9","Hotovost":"#475569","Jiné":"#64748b",
+              };
+
+              // Build sector data from buy positions
+              const sectorVals = {};
+              portfolio.positions.filter(p => p.category !== "cash").forEach(p => {
+                const sector = SECTOR_MAP[p.ticker] || prices[p.ticker]?.sector
+                  || (p.category==="etf"?"ETF – Diverzif."
+                    :p.category==="crypto"?"Krypto"
+                    :p.category==="real_estate"?"Nemovitosti"
+                    :"Jiné");
+                const val = p.currentValueCZK > 0 ? p.currentValueCZK : p.totalCostCZK;
+                sectorVals[sector] = (sectorVals[sector]||0) + val;
+              });
+
+              const sEntries = Object.entries(sectorVals).filter(([,v])=>v>0)
+                .sort((a,b)=>b[1]-a[1]);
+              const sTotal = sEntries.reduce((s,[,v])=>s+v,0)||1;
+              if (!sEntries.length) return null;
+
+              // SVG donut
+              const rad=85, cx=110, cy=110, W=220, H=220;
+              let ang = -Math.PI/2;
+              const slices = sEntries.map(([sector,val])=>{
+                const slice = val/sTotal*Math.PI*2;
+                const x1=cx+rad*Math.cos(ang), y1=cy+rad*Math.sin(ang);
+                ang+=slice;
+                const x2=cx+rad*Math.cos(ang), y2=cy+rad*Math.sin(ang);
+                const midAng = ang - slice/2;
+                const lx=cx+(rad*0.75)*Math.cos(midAng), ly=cy+(rad*0.75)*Math.sin(midAng);
+                return {sector,val,slice,x1,y1,x2,y2,large:slice>Math.PI?1:0,lx,ly,midAng};
+              });
+
+              return (
+                <div style={{...S.card,marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+                    <div style={S.sectionTitle}>Diverzifikace — sektory</div>
+                    <div style={{fontSize:11,color:textMuted}}>{sEntries.length} sektorů · pouze akcie</div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"auto 1fr",gap:20,alignItems:"center"}}>
+                    {/* Donut */}
+                    <div style={{position:"relative"}}>
+                      <svg viewBox={`0 0 ${W} ${H}`} style={{width:isMobile?"100%":220,height:"auto"}}
+                        onMouseLeave={()=>setHovCat(null)}>
+                        {slices.map((s,i)=>{
+                          const isHov = hovCat?.cat===s.sector;
+                          const r2 = isHov ? rad+6 : rad;
+                          const color = SECTOR_COLORS[s.sector]||"#64748b";
+                          return (
+                            <g key={s.sector}>
+                              <path
+                                d={`M${cx},${cy} L${s.x1},${s.y1} A${r2},${r2} 0 ${s.large},1 ${s.x2},${s.y2} Z`}
+                                fill={color} opacity={isHov?1:hovCat?0.45:0.9}
+                                style={{cursor:"pointer",transition:"all .15s"}}
+                                onMouseEnter={()=>setHovCat({cat:s.sector,val:s.val})}/>
+                              {s.slice > 0.25 && (
+                                <text x={s.lx} y={s.ly} textAnchor="middle" fill="#fff"
+                                  fontSize="7" fontWeight="700" pointerEvents="none">
+                                  {(s.val/sTotal*100).toFixed(0)}%
+                                </text>
+                              )}
+                            </g>
+                          );
+                        })}
+                        {/* Center hole */}
+                        <circle cx={cx} cy={cy} r={rad*0.48} fill={bgCard}/>
+                        {/* Center text */}
+                        {hovCat ? (
+                          <>
+                            <text x={cx} y={cy-8} textAnchor="middle" fill={SECTOR_COLORS[hovCat.cat]||accent} fontSize="10" fontWeight="800">{hovCat.cat}</text>
+                            <text x={cx} y={cy+6} textAnchor="middle" fill={textPrimary} fontSize="9" fontWeight="700">{fmt(hovCat.val,"CZK",0)}</text>
+                            <text x={cx} y={cy+18} textAnchor="middle" fill={textMuted} fontSize="9">{(hovCat.val/sTotal*100).toFixed(1)}%</text>
+                          </>
+                        ) : (
+                          <>
+                            <text x={cx} y={cy-5} textAnchor="middle" fill={textPrimary} fontSize="10" fontWeight="700">SEKTORY</text>
+                            <text x={cx} y={cy+9} textAnchor="middle" fill={textMuted} fontSize="8">{sEntries.length} skupin</text>
+                          </>
+                        )}
+                      </svg>
+                    </div>
+                    {/* Legend */}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px 16px"}}>
+                      {sEntries.map(([sector,val])=>(
+                        <div key={sector}
+                          style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",
+                            padding:"3px 6px",borderRadius:6,
+                            background:hovCat?.cat===sector?(SECTOR_COLORS[sector]||"#64748b")+"22":"transparent",
+                            transition:"background .15s"}}
+                          onMouseEnter={()=>setHovCat({cat:sector,val})}
+                          onMouseLeave={()=>setHovCat(null)}>
+                          <div style={{width:10,height:10,borderRadius:2,background:SECTOR_COLORS[sector]||"#64748b",flexShrink:0}}/>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:10,color:textPrimary,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{sector}</div>
+                            <div style={{fontSize:9,color:textMuted}}>{fmt(val,"CZK",0)}</div>
+                          </div>
+                          <span style={{fontSize:10,fontWeight:700,color:SECTOR_COLORS[sector]||textMuted,flexShrink:0}}>
+                            {(val/sTotal*100).toFixed(1)}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{fontSize:10,color:textMuted,marginTop:8,fontStyle:"italic"}}>
+                    * Sektory jsou přiřazeny automaticky dle tickeru. Neznámé tickery jsou zařazeny do "Jiné".
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Top positions + Annual returns */}
             <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:14, marginBottom:14 }}>
