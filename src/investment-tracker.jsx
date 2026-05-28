@@ -5216,19 +5216,9 @@ export default function App() {
             )}
             <div style={{display:"flex",gap:8,marginTop:16}}>
               <button style={{...S.btn("primary"),flex:1,padding:"11px"}} onClick={()=>{
-                // Dividend: compute net in original currency, then convert to CZK
-                const hqDiv=activeTransactions.filter(t=>t.type==="buy"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0)-activeTransactions.filter(t=>t.type==="sell"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0);
-                const qtyDiv=parseFloat(newTx.quantity)||hqDiv||1;
-                const perShareDiv=parseFloat(newTx.dividendPerShare)||0;
-                const taxDiv=parseFloat(newTx.divTax)||15;
-                // divNetOrig = čistá dividenda v originální měně (USD/EUR/CZK)
-                let divNetOrig=0;
-                if(newTx.type==="dividend"&&perShareDiv){
-                  divNetOrig=parseFloat((perShareDiv*qtyDiv*(1-taxDiv/100)).toFixed(5));
-                } else if(newTx.type==="dividend"){
-                  divNetOrig=parseFloat(newTx.dividendAmount)||0;
-                }
-                // divAmountCZK = finální CZK hodnota = divNetOrig × kurz
+                // Dividend: use the value already shown in the field (computed correctly by onChange)
+                // dividendAmount field = net in original currency; just convert to CZK
+                const divNetOrig = newTx.type==="dividend" ? (parseFloat(newTx.dividendAmount)||0) : 0;
                 const divAmountCZK = newTx.type==="dividend"
                   ? Math.round(toCZK(divNetOrig, newTx.currency, rates) * 100) / 100
                   : 0;
