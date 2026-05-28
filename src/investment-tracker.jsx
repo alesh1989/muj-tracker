@@ -3552,7 +3552,7 @@ export default function App() {
         }
       } else if (t.type === "dividend" && t.dividendAmount) {
         // dividendAmount is already in CZK (converted at entry time)
-        totalDividendsCZK += toCZK(t.dividendAmount||0, t.currency||"CZK", rates);
+        totalDividendsCZK += t.dividendAmountCZK || (t.currency==="CZK" ? t.dividendAmount||0 : toCZK(t.dividendAmount||0, t.currency||"USD", rates));
       } else if (t.type === "deposit") {
         // Deposits don't count as investment cost - they're cash inflows
       } else if (t.type === "withdraw") {
@@ -4464,18 +4464,24 @@ export default function App() {
                         ))}
                       </tr></thead>
                       <tbody>
-                        {(() => {
-                          // Sort all transactions by date for sequential IDs
-                          const allSorted = [...activeTransactions].sort((a,b)=>new Date(a.date)-new Date(b.date));
-                          const idMap = {};
-                          allSorted.forEach((t,i)=>{ idMap[t.id]=i+1; });
+                        {(()=>{
+                          const allSorted=[...activeTransactions].sort((a,b)=>new Date(a.date)-new Date(b.date));
+                          const idMap={};
+                          allSorted.forEach((t,i)=>{idMap[t.id]=i+1;});
                           return filtered.map(t=>{
-                          const seqId = idMap[t.id]||"";
-                          const tc = TX_TYPE_COLORS[t.type]||"#94a3b8";
+                          const seqId=idMap[t.id]||"";
+                          const tc=TX_TYPE_COLORS[t.type]||"#94a3b8";
                           const cc = TX_CAT_COLORS[t.category]||"#64748b";
                           const tl = TX_TYPE_LABELS[t.type]||t.type;
                           const cl = TX_CAT_LABELS[t.category]||t.category;
-                          const getDivCZK=(t)=>toCZK(t.dividendAmount||0,t.currency||"CZK",rates);
+                          // dividendAmount stored in CZK if auto-calculated, else convert
+                          const getDivCZK=(t)=>{
+                            if(t.dividendAmountCZK) return t.dividendAmountCZK;
+                            const amt=t.dividendAmount||0;
+                            // If currency CZK or amount looks like CZK (>100 for most), use direct
+                            if(t.currency==="CZK") return amt;
+                            return toCZK(amt,t.currency||"USD",rates);
+                          };
                           const totalCZK = t.type==="dividend"?getDivCZK(t)
                             :(t.type==="deposit"||t.type==="withdraw")?toCZK(t.amount||0,t.currency,rates)
                             :toCZK((t.quantity||0)*(t.price||0)+(t.fee||0),t.currency,rates);
@@ -4510,8 +4516,7 @@ export default function App() {
                               </td>
                             </tr>
                           );
-                        });
-                        })()}
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -5228,7 +5233,10 @@ export default function App() {
                 if (isDup && !window.confirm("⚠ Zdá se, že tato transakce již existuje (stejný typ, ticker, datum, množství a cena). Opravdu přidat?")) return;
                 const tx={id:Date.now().toString(),portfolioId:activePortfolioId,...newTx,
                   quantity:parseFloat(newTx.quantity)||0,price:parseFloat(newTx.price)||0,
-                  fee:parseFloat(newTx.fee)||0,dividendAmount:divAmount,
+                  fee:parseFloat(newTx.fee)||0,
+                  dividendAmount:divAmount,
+                  dividendAmountCZK: divAmount, // always CZK
+                  currency: newTx.currency, // keep original currency for reference
                   dividendPerShare:parseFloat(newTx.dividendPerShare)||0,
                   amount:parseFloat(newTx.amount)||0};
                 setTransactions(prev=>[...prev,tx]);
