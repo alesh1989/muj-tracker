@@ -1163,7 +1163,7 @@ function TipyTab({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, bo
     setLoadingTips(true); setErrorMsg(""); setTips(null); setSelectedTip(null); setReport(null);
     try {
       const sLabel = SECTORS.find(s=>s[0]===sector)?.[1]||"všechny sektory";
-      const prompt = `Vyber 6 podhodnocených akcií${sector!=="all"?" ze sektoru "+sLabel:""} s margin of safety. Datum: ${new Date().toLocaleDateString("cs-CZ")}. currentPrice=0 (bude přepsáno). Odpověz POUZE validním JSON bez markdown:
+      const prompt = `Vyber 8 akcií${sector!=="all"?" ze sektoru "+sLabel:""} kde je AKTUÁLNÍ TRŽNÍ CENA (k ${new Date().toLocaleDateString("cs-CZ")}) NIŽŠÍ než jejich fundamentální fair value (DCF/Graham). Zásadní podmínka: fairValue musí být vyšší než skutečná aktuální cena — vyber skutečně podhodnocené příležitosti s alespoň 15% margin of safety. Uveď realistické fairValue odvozené z DCF, P/E normalizace nebo Graham čísla. Odpověz POUZE validním JSON bez markdown:
 {"updated":"dnes","tips":[{"ticker":"X","name":"Název","sector":"S","currency":"USD","currentPrice":0,"fairValue":150,"upside":25,"rating":"Silný nákup","thesis":"Teze.","risks":"Rizika.","pe":18,"peVsAvg":"pod avg","analystBuy":30,"analystHold":8,"analystSell":2,"analystTarget":155,"revenueGrowth":8,"epsGrowth":10,"roe":20,"debtToEquity":0.5,"dividendYield":1,"catalysts":["Kat1","Kat2"]}]}`;
       const data = await callClaude(prompt, 6000);
       // Fetch real prices and overwrite AI-generated prices
@@ -1193,8 +1193,10 @@ function TipyTab({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, bo
                 }
                 return t;
               });
-              // Filter out tips with negative upside (overvalued based on real price)
-              data.tips = data.tips.filter(t => t.upside > -20);
+              // Keep only genuinely undervalued: real price < fair value (upside > 0)
+              data.tips = data.tips.filter(t => t.upside > 0);
+              // Sort by upside descending
+              data.tips.sort((a,b) => b.upside - a.upside);
             }
           }
         }
@@ -1302,7 +1304,10 @@ ${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.rec
 
       {tips&&!loadingTips&&(
         <>
-          <div style={{fontSize:11,color:textMuted,marginBottom:14}}>Aktualizováno: {tips.updated} · {tips.tips?.length} tipů</div>
+          <div style={{fontSize:11,color:textMuted,marginBottom:14}}>
+            Aktualizováno: {tips.updated} · {tips.tips?.length} tipů s cenou pod fair value
+            {tips.tips?.length === 0 && <span style={{color:"#f87171",marginLeft:8}}>— žádná akcie nesplňuje kritéria, zkuste jiný sektor</span>}
+          </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:14,marginBottom:24}}>
             {(tips.tips||[]).map((tip,i)=>(
               <div key={i} style={{...S.card,border:`1px solid ${selectedTip?.ticker===tip.ticker?"#6366f1":border}`}}>
