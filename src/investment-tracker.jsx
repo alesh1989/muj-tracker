@@ -5216,11 +5216,15 @@ export default function App() {
             )}
             <div style={{display:"flex",gap:8,marginTop:16}}>
               <button style={{...S.btn("primary"),flex:1,padding:"11px"}} onClick={()=>{
-                // Dividend: use the value already shown in the field (computed correctly by onChange)
-                // dividendAmount field = net in original currency; just convert to CZK
-                const divNetOrig = newTx.type==="dividend" ? (parseFloat(newTx.dividendAmount)||0) : 0;
+                // Dividend: recompute exactly like the hint (ps × qty × (1-tax) → toCZK)
+                // This avoids double-conversion from the dividendAmount field
+                const _ps = parseFloat(newTx.dividendPerShare)||0;
+                const _tax = parseFloat(newTx.divTax)||15;
+                const _hq = activeTransactions.filter(t=>t.type==="buy"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0) - activeTransactions.filter(t=>t.type==="sell"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0);
+                const _qty = parseFloat(newTx.quantity)||_hq||0;
+                const divNetOrig = _ps && _qty ? parseFloat((_ps*_qty*(1-_tax/100)).toFixed(5)) : (parseFloat(newTx.dividendAmount)||0);
                 const divAmountCZK = newTx.type==="dividend"
-                  ? Math.round(toCZK(divNetOrig, newTx.currency, rates) * 100) / 100
+                  ? Math.round(toCZK(_ps && _qty ? _ps*_qty*(1-_tax/100) : divNetOrig, newTx.currency, rates) * 100) / 100
                   : 0;
                 // Check for duplicate
                 const isDup = activeTransactions.some(t =>
