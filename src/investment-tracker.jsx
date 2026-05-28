@@ -1135,13 +1135,13 @@ function CsvImportModal({ onClose, onImport, S }) {
 
 // ─── TIPY TAB ────────────────────────────────────────────────────────────────
 function TipyTab({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, border }) {
-  const [tips, setTips] = React.useState(null);
-  const [loadingTips, setLoadingTips] = React.useState(false);
-  const [selectedTip, setSelectedTip] = React.useState(null);
-  const [report, setReport] = React.useState(null);
-  const [loadingReport, setLoadingReport] = React.useState(false);
-  const [sector, setSector] = React.useState("all");
-  const [errorMsg, setErrorMsg] = React.useState("");
+  const [tips, setTips] = useState(null);
+  const [loadingTips, setLoadingTips] = useState(false);
+  const [selectedTip, setSelectedTip] = useState(null);
+  const [report, setReport] = useState(null);
+  const [loadingReport, setLoadingReport] = useState(false);
+  const [sector, setSector] = useState("all");
+  const [errorMsg, setErrorMsg] = useState("");
 
   const SECTORS = [
     ["all","Vše"],["tech","Technologie"],["finance","Finance"],["health","Zdravotnictví"],
