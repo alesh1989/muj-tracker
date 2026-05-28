@@ -3192,7 +3192,7 @@ export default function App() {
         const di = localStorage.getItem(`${lsKey}_dividends`);
         const ea = localStorage.getItem(`${lsKey}_earnings`);
         const fi = localStorage.getItem(`${lsKey}_fi`);
-        if (tx) setTransactions(JSON.parse(tx));
+        if (tx) { const parsed=JSON.parse(tx); setTransactions(parsed.map(t=>t.type==="dividend"&&!t.dividendAmountCZK&&t.dividendAmount?{...t,dividendAmountCZK:t.dividendAmount}:t)); }
         if (po) setPortfolios(JSON.parse(po));
         if (ap) setActivePortfolioId(JSON.parse(ap));
         if (di) setDividends(JSON.parse(di));
@@ -3228,7 +3228,7 @@ export default function App() {
             ticker: t.ticker, name: t.name, category: t.category,
             date: t.date, quantity: t.quantity, price: t.price,
             currency: t.currency, fee: t.fee,
-            dividendAmount: t.dividend_amount, amount: t.amount, notes: t.notes
+            dividendAmount: t.dividend_amount, dividendAmountCZK: t.type==="dividend" ? t.dividend_amount : undefined, amount: t.amount, notes: t.notes
           }));
           setTransactions(txs);
           localStorage.setItem(`${lsKey}_tx`, JSON.stringify(txs));
@@ -4459,7 +4459,7 @@ export default function App() {
                   <div style={{overflowX:"auto"}}>
                     <table style={S.table}>
                       <thead><tr>
-                        {[lang==="en"?"Date":"Datum","Typ",lang==="en"?"Ticker":"Ticker","Kat.",lang==="en"?"Qty":"Mn.",lang==="en"?"Price":"Cena",lang==="en"?"Fee":"Popl.",lang==="en"?"Total CZK":"CZK",""].map((h,i)=>(
+                        {["",lang==="en"?"Date":"Datum","Typ",lang==="en"?"Ticker":"Ticker","Kat.",lang==="en"?"Qty":"Mn.",lang==="en"?"Price":"Cena",lang==="en"?"Fee":"Popl.",lang==="en"?"Total CZK":"CZK",""].map((h,i)=>(
                           <th key={i} style={S.th}>{h}</th>
                         ))}
                       </tr></thead>
@@ -5156,13 +5156,14 @@ export default function App() {
               {label:lang==="en"?"Fee":"Poplatek",key:"fee",type:"number",placeholder:"0"},
               {label:lang==="en"?"Gross Div/share":"Hrubá div./akcie",key:"dividendPerShare",type:"number",placeholder:"0.47"},
               {label:lang==="en"?"Tax (%)":"Daň (%)",key:"divTax",type:"number",placeholder:"15"},
-              {label:lang==="en"?"Net div. total (CZK, auto)":"Čistá div. celkem (CZK, auto)",key:"dividendAmount",type:"number",placeholder:"auto"},
+              {label:lang==="en"?"Net div. total (CZK, auto)":"Čistá div. celkem (Kč, auto)",key:"dividendAmount",type:"number",placeholder:"auto"},
               {label:lang==="en"?"Amount":"Částka",key:"amount",type:"number",placeholder:"5000"},
               {label:lang==="en"?"Note":"Poznámka",key:"notes",type:"text",placeholder:""},
             ].filter(f=>f.key!=="dividendPerShare"||newTx.type==="dividend")
              .filter(f=>f.key!=="divTax"||newTx.type==="dividend")
              .filter(f=>f.key!=="dividendAmount"||newTx.type==="dividend")
              .filter(f=>f.key!=="amount"||newTx.type==="deposit"||newTx.type==="withdraw")
+             .filter(f=>f.key!=="fee"||newTx.type!=="dividend")
              .filter(f=>!["ticker","name"].includes(f.key)||!["deposit","withdraw"].includes(newTx.type))
              .filter(f=>!["quantity","price"].includes(f.key)||!["dividend","deposit","withdraw"].includes(newTx.type))
              .map(f=>(
