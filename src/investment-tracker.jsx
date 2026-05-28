@@ -3552,7 +3552,7 @@ export default function App() {
         }
       } else if (t.type === "dividend" && t.dividendAmount) {
         // dividendAmount is already in CZK (converted at entry time)
-        totalDividendsCZK += t.price>0 ? t.price : toCZK(t.dividendAmount||0, t.currency||"CZK", rates);
+        totalDividendsCZK += (t.dividendCZK||t.currency==="CZK") ? (t.dividendAmount||0) : toCZK(t.dividendAmount||0, t.currency||"CZK", rates);
       } else if (t.type === "deposit") {
         // Deposits don't count as investment cost - they're cash inflows
       } else if (t.type === "withdraw") {
@@ -4473,9 +4473,14 @@ export default function App() {
                           const cc = TX_CAT_COLORS[t.category]||"#64748b";
                           const tl = TX_TYPE_LABELS[t.type]||t.type;
                           const cl = TX_CAT_LABELS[t.category]||t.category;
-                          // getDivCZK: for dividends, t.price stores the CZK value (set at save time)
-                          // Fallback: convert dividendAmount from original currency if price not set
-                          const getDivCZK=(t)=>t.price>0 ? t.price : toCZK(t.dividendAmount||0, t.currency||"USD", rates);
+                          // getDivCZK: t.dividendCZK=true means dividendAmount is already in CZK
+                          // Legacy records without flag: convert from original currency
+                          const getDivCZK=(t)=>{
+                            const amt=t.dividendAmount||0;
+                            if(!amt) return 0;
+                            if(t.dividendCZK||t.currency==="CZK") return amt;
+                            return toCZK(amt, t.currency||"USD", rates);
+                          };
                           const totalCZK = t.type==="dividend"?getDivCZK(t)
                             :(t.type==="deposit"||t.type==="withdraw")?toCZK(t.amount||0,t.currency,rates)
                             :toCZK((t.quantity||0)*(t.price||0)+(t.fee||0),t.currency,rates);
@@ -4498,7 +4503,7 @@ export default function App() {
                               </td>
                               <td style={S.td}>{isDepWith||t.type==="dividend"?"–":t.quantity}</td>
                               <td style={S.td}>
-                                {t.type==="dividend"?fmt(getDivCZK(t),"CZK",0):isDepWith?fmt(t.amount||0,t.currency,0):`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency==="CZK"?"Kč":t.currency}`}
+                                {t.type==="dividend"?(t.currency==="CZK"||!t.price?`${getDivCZK(t).toLocaleString("cs-CZ",{minimumFractionDigits:0,maximumFractionDigits:2})} Kč`:`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency}`):isDepWith?fmt(t.amount||0,t.currency,0):`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency==="CZK"?"Kč":t.currency}`}
                               </td>
                               <td style={S.td}>{t.fee?`${(t.fee||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:2})} ${t.currency==="CZK"?"Kč":t.currency}`:"–"}</td>
                               <td style={{...S.td,fontWeight:600,color:t.type==="sell"||t.type==="withdraw"?"#f87171":"#22d3a0"}}>{fmt(totalCZK,"CZK",0)}</td>
@@ -5211,20 +5216,22 @@ export default function App() {
             )}
             <div style={{display:"flex",gap:8,marginTop:16}}>
               <button style={{...S.btn("primary"),flex:1,padding:"11px"}} onClick={()=>{
-                // Compute net dividend in ORIGINAL currency and CZK separately
+                // Dividend: compute net in original currency, then convert to CZK
                 const hqDiv=activeTransactions.filter(t=>t.type==="buy"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0)-activeTransactions.filter(t=>t.type==="sell"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0);
                 const qtyDiv=parseFloat(newTx.quantity)||hqDiv||1;
                 const perShareDiv=parseFloat(newTx.dividendPerShare)||0;
                 const taxDiv=parseFloat(newTx.divTax)||15;
-                let divAmount=0; // in original currency
-                let divAmountCZK=0; // always CZK — stored in price field
+                // divNetOrig = čistá dividenda v originální měně (USD/EUR/CZK)
+                let divNetOrig=0;
                 if(newTx.type==="dividend"&&perShareDiv){
-                  divAmount=parseFloat((perShareDiv*qtyDiv*(1-taxDiv/100)).toFixed(5));
-                  divAmountCZK=Math.round(toCZK(divAmount,newTx.currency,rates)*100)/100;
-                } else if(newTx.type==="dividend") {
-                  divAmount=parseFloat(newTx.dividendAmount)||0;
-                  divAmountCZK=Math.round(toCZK(divAmount,newTx.currency,rates)*100)/100;
+                  divNetOrig=parseFloat((perShareDiv*qtyDiv*(1-taxDiv/100)).toFixed(5));
+                } else if(newTx.type==="dividend"){
+                  divNetOrig=parseFloat(newTx.dividendAmount)||0;
                 }
+                // divAmountCZK = finální CZK hodnota = divNetOrig × kurz
+                const divAmountCZK = newTx.type==="dividend"
+                  ? Math.round(toCZK(divNetOrig, newTx.currency, rates) * 100) / 100
+                  : 0;
                 // Check for duplicate
                 const isDup = activeTransactions.some(t =>
                   t.type===newTx.type && t.ticker===newTx.ticker &&
@@ -5234,10 +5241,10 @@ export default function App() {
                 if (isDup && !window.confirm("⚠ Zdá se, že tato transakce již existuje (stejný typ, ticker, datum, množství a cena). Opravdu přidat?")) return;
                 const tx={id:Date.now().toString(),portfolioId:activePortfolioId,...newTx,
                   quantity:parseFloat(newTx.quantity)||0,
-                  // For dividends: price stores CZK value for reliable display; for others: actual price
-                  price: newTx.type==="dividend" ? divAmountCZK : (parseFloat(newTx.price)||0),
+                  price: newTx.type==="dividend" ? divNetOrig : (parseFloat(newTx.price)||0), // Cena col: orig currency for div
                   fee:parseFloat(newTx.fee)||0,
-                  dividendAmount:divAmount, // in original currency (e.g. USD)
+                  dividendAmount: newTx.type==="dividend" ? divAmountCZK : 0, // ALWAYS CZK
+                  dividendCZK: newTx.type==="dividend" ? true : undefined, // flag: dividendAmount is in CZK
                   currency: newTx.currency,
                   dividendPerShare:parseFloat(newTx.dividendPerShare)||0,
                   amount:parseFloat(newTx.amount)||0};
