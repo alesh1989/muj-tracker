@@ -3733,8 +3733,8 @@ export default function App() {
   const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b", cash:"#22d3a0", real_estate:"#f97316" };
   const catLabel = { stock:t.stocks, etf:t.etf, crypto:t.crypto, cash:lang==="en"?"Cash":"Hotovost", real_estate:lang==="en"?"Real Estate":"Nemovitosti" };
 
-  const TABS = ["dashboard","portfolio","transakce","cashflow","dividendy","novinky","analyza","fi","nastaveni"];
-  const TAB_LABELS = { dashboard:t.dashboard, portfolio:t.portfolio, transakce:t.transakce, cashflow:t.cashflow, dividendy:t.dividendy, novinky:t.novinky, analyza:t.analyza, fi:t.fi, nastaveni:t.nastaveni };
+  const TABS = ["dashboard","portfolio","transakce","cashflow","dividendy","novinky","analyza","fi","dane","report","nastaveni"];
+  const TAB_LABELS = { dashboard:t.dashboard, portfolio:t.portfolio, transakce:t.transakce, cashflow:t.cashflow, dividendy:t.dividendy, novinky:t.novinky, analyza:t.analyza, fi:t.fi, dane:"🧾 Daně ČR", report:"📄 Report", nastaveni:t.nastaveni };
   const filtered = filterCat === "all" ? portfolio.positions : portfolio.positions.filter(p => p.category === filterCat);
 
   // ─── MOBILE DETECTION ────────────────────────────────────────────────────
