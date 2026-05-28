@@ -3168,6 +3168,7 @@ export default function App() {
   };
   const [loaded, setLoaded] = useState(false);
   const [divCalYear, setDivCalYear] = useState(new Date().getFullYear());
+  const [txTypeFilter, setTxTypeFilter] = useState("all"); // filter for transactions tab
   const [hovCat, setHovCat] = useState(null);
   const [ratesStatus, setRatesStatus] = useState("idle"); // idle | loading | ok | error
 
@@ -4338,68 +4339,137 @@ export default function App() {
         {/* ─── TRANSAKCE ───────────────────────────────────────────────────────── */}
         {tab === "transakce" && (
           <>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14, flexWrap:"wrap", gap:8 }}>
-              <div style={{ fontSize:16, fontWeight:700, color:textPrimary }}>{lang==="en"?"Transactions":"Historie transakcí"}</div>
-              <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+            {/* Header row */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+              <div style={{fontSize:16,fontWeight:700,color:textPrimary}}>{lang==="en"?"Transactions":"Historie transakcí"}</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                 <button style={S.btn("primary")} onClick={()=>setShowAddTx(true)}>+ {lang==="en"?"Add":"Přidat"}</button>
-                <button style={S.btn("outline")} onClick={()=>setShowCsvImport(true)}>📂 Import CSV</button>
-                <button style={{ ...S.btn("outline") }} onClick={() => {
-                  const headers = ["type","ticker","name","category","date","quantity","price","currency","fee","dividendAmount","amount","notes"];
-                  const rows = activeTransactions.map(t => headers.map(h => { const v=t[h]??""; return String(v).includes(",") ? `"${v}"` : v; }).join(","));
-                  const csv = [headers.join(","), ...rows].join("\n");
-                  const blob = new Blob([csv], { type:"text/csv;charset=utf-8;" });
-                  const a = document.createElement("a");
-                  a.href = URL.createObjectURL(blob);
-                  a.download = `transakce-${new Date().toISOString().slice(0,10)}.csv`;
-                  a.click();
-                }}>📤 Export CSV</button>
-                <button style={{ ...S.btn("danger"), border:"1px solid #dc262644" }} onClick={() => setShowDeleteAll(true)}>🗑 {lang==="en"?"Delete All":"Smazat vše"}</button>
+                <button style={S.btn("outline")} onClick={()=>setShowCsvImport(true)}>📂 CSV</button>
+                <button style={S.btn("outline")} onClick={()=>{
+                  const headers=["type","ticker","name","category","date","quantity","price","currency","fee","dividendAmount","amount","notes"];
+                  const rows=activeTransactions.map(t=>headers.map(h=>{const v=t[h]??"";return String(v).includes(",")?\`"${v}"\`:v;}).join(","));
+                  const csv=[headers.join(","),...rows].join("\n");
+                  const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+                  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=\`transakce-\${new Date().toISOString().slice(0,10)}.csv\`;a.click();
+                }}>📤 Export</button>
+                <button style={{...S.btn("danger"),border:"1px solid #dc262644"}} onClick={()=>setShowDeleteAll(true)}>🗑</button>
               </div>
             </div>
 
-            <div style={{ overflowX:"auto" }}>
-              <table style={S.table}>
-                <thead><tr>
-                  {[lang==="en"?"Date":"Datum",lang==="en"?"Type":"Typ",lang==="en"?"Ticker":"Ticker",lang==="en"?"Category":"Kategorie",lang==="en"?"Qty":"Množství",lang==="en"?"Price":"Cena",lang==="en"?"Fee":"Poplatek",lang==="en"?"Total CZK":"Celkem CZK",""].map((h,i)=>(
-                    <th key={i} style={S.th}>{h}</th>
-                  ))}
-                </tr></thead>
-                <tbody>
-                  {[...activeTransactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>{
-                    const typeColor = {buy:"#10b981",sell:"#ef4444",dividend:"#8b5cf6",deposit:"#22d3a0",withdraw:"#f59e0b"}[t.type]||"#94a3b8";
-                    const typeLabel = {buy:lang==="en"?"Buy":"Nákup",sell:lang==="en"?"Sell":"Prodej",dividend:lang==="en"?"Dividend":"Dividenda",deposit:lang==="en"?"Deposit":"Vklad",withdraw:lang==="en"?"Withdrawal":"Výběr"}[t.type]||t.type;
-                    // dividendAmount: if stored in original currency (old tx), convert; if already CZK, use direct
-                    const getDivCZK = (t) => {
-                      const amt = t.dividendAmount||0;
-                      if(!amt) return 0;
-                      // Always convert using live rates — toCZK returns amt as-is for CZK
-                      return toCZK(amt, t.currency||"CZK", rates);
-                    };
-                    const totalCZK = t.type==="dividend" ? getDivCZK(t)
-                      : (t.type==="deposit"||t.type==="withdraw") ? toCZK(t.amount||0,t.currency,rates)
-                      : toCZK((t.quantity||0)*(t.price||0)+(t.fee||0),t.currency,rates);
-                    return (
-                      <tr key={t.id}>
-                        <td style={S.td}>{t.date}</td>
-                        <td style={S.td}><span style={S.badge(typeColor)}>{typeLabel}</span></td>
-                        <td style={S.td}><b style={{color:textPrimary}}>{t.ticker}</b><div style={{fontSize:9,color:textMuted}}>{(tickerNames[t.ticker]||KNOWN_NAMES[t.ticker]||t.name||"")?.slice(0,18)}</div></td>
-                        <td style={S.td}><span style={S.badge(catColor[t.category]||"#64748b")}>{catLabel[t.category]||t.category}</span></td>
-                        <td style={S.td}>{t.type==="dividend"||t.type==="deposit"||t.type==="withdraw"?"–":t.quantity}</td>
-                        <td style={S.td}>{t.type==="dividend"?fmt(t.dividendAmount,t.currency,2):t.type==="deposit"||t.type==="withdraw"?fmt(t.amount||0,t.currency,0):`${t.price} ${t.currency}`}</td>
-                        <td style={S.td}>{t.fee?`${t.fee} ${t.currency}`:"–"}</td>
-                        <td style={{...S.td,fontWeight:600,color:textPrimary}}>{fmt(totalCZK,"CZK",0)}</td>
-                        <td style={S.td}>
-                          <div style={{display:"flex",gap:4}}>
-                            <button style={{...S.btn("outline"),padding:"3px 8px",fontSize:11}} onClick={()=>setEditTx({...t})}>✏</button>
-                            <button style={{...S.btn("danger"),padding:"3px 8px"}} onClick={()=>{ if(window.confirm("Smazat?")) setTransactions(prev=>prev.filter(x=>x.id!==t.id)); }}>✕</button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            {/* Filter bar */}
+            {(() => {
+              // Distinct type colors — fully differentiated
+              const TX_TYPE_COLORS = {
+                buy:"#3b82f6",        // modrá — nákup
+                sell:"#ef4444",       // červená — prodej
+                dividend:"#a855f7",   // fialová — dividenda
+                deposit:"#10b981",    // zelená — vklad
+                withdraw:"#f97316",   // oranžová — výběr
+              };
+              const TX_CAT_COLORS = {
+                stock:"#6366f1",      // indigo — akcie
+                etf:"#06b6d4",        // azurová — ETF (odlišena od cash)
+                crypto:"#f59e0b",     // žlutá — crypto
+                real_estate:"#f97316",// oranžová — nemovitosti
+                cash:"#84cc16",       // limetková — hotovost (odlišena od ETF)
+              };
+              const TX_TYPE_LABELS = {buy:lang==="en"?"Buy":"Nákup",sell:lang==="en"?"Sell":"Prodej",dividend:lang==="en"?"Dividend":"Dividenda",deposit:lang==="en"?"Deposit":"Vklad",withdraw:lang==="en"?"Withdrawal":"Výběr"};
+              const TX_CAT_LABELS = {stock:lang==="en"?"Stocks":"Akcie",etf:"ETF",crypto:"Crypto",real_estate:lang==="en"?"Real Estate":"Nemovitosti",cash:lang==="en"?"Cash":"Hotovost"};
+
+              const [txFilter, setTxFilter] = [txTypeFilter, setTxTypeFilter];
+
+              const filtered = [...activeTransactions]
+                .filter(t => {
+                  if(!txFilter||txFilter==="all") return true;
+                  if(Object.keys(TX_TYPE_COLORS).includes(txFilter)) return t.type===txFilter;
+                  return t.category===txFilter;
+                })
+                .sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+              return (
+                <>
+                  {/* Filter chips */}
+                  <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
+                    <span style={{fontSize:10,color:textMuted,marginRight:2}}>{lang==="en"?"Filter:":"Filtr:"}</span>
+                    {["all","buy","sell","dividend","deposit","withdraw","stock","etf","crypto","real_estate","cash"].map(f=>{
+                      const isType = Object.keys(TX_TYPE_COLORS).includes(f);
+                      const color = f==="all"?accent:isType?TX_TYPE_COLORS[f]:TX_CAT_COLORS[f]||"#64748b";
+                      const label = f==="all"?(lang==="en"?"All":"Vše"):isType?(TX_TYPE_LABELS[f]||f):(TX_CAT_LABELS[f]||f);
+                      const active = txFilter===f;
+                      return (
+                        <button key={f} onClick={()=>setTxFilter(active?"all":f)}
+                          style={{fontSize:10,padding:"3px 10px",borderRadius:20,cursor:"pointer",fontFamily:"inherit",
+                            fontWeight:active?700:400,
+                            background:active?color+"33":"transparent",
+                            color:active?color:textMuted,
+                            border:\`1px solid \${active?color:border}\`,
+                            transition:"all 0.15s"}}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                    {txFilter&&txFilter!=="all"&&(
+                      <span style={{fontSize:10,color:textMuted}}>
+                        · {filtered.length} {lang==="en"?"records":"záznamů"}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Table */}
+                  <div style={{overflowX:"auto"}}>
+                    <table style={S.table}>
+                      <thead><tr>
+                        {[lang==="en"?"Date":"Datum","Typ",lang==="en"?"Ticker":"Ticker","Kat.",lang==="en"?"Qty":"Mn.",lang==="en"?"Price":"Cena",lang==="en"?"Fee":"Popl.",lang==="en"?"Total CZK":"CZK",""].map((h,i)=>(
+                          <th key={i} style={S.th}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {filtered.map(t=>{
+                          const tc = TX_TYPE_COLORS[t.type]||"#94a3b8";
+                          const cc = TX_CAT_COLORS[t.category]||"#64748b";
+                          const tl = TX_TYPE_LABELS[t.type]||t.type;
+                          const cl = TX_CAT_LABELS[t.category]||t.category;
+                          const getDivCZK=(t)=>toCZK(t.dividendAmount||0,t.currency||"CZK",rates);
+                          const totalCZK = t.type==="dividend"?getDivCZK(t)
+                            :(t.type==="deposit"||t.type==="withdraw")?toCZK(t.amount||0,t.currency,rates)
+                            :toCZK((t.quantity||0)*(t.price||0)+(t.fee||0),t.currency,rates);
+                          const isDepWith = t.type==="deposit"||t.type==="withdraw";
+                          const rowBg = t.type==="buy"?"#3b82f608":t.type==="deposit"?"#10b98108":t.type==="sell"?"#ef444408":t.type==="withdraw"?"#f9731608":"transparent";
+                          return (
+                            <tr key={t.id} style={{background:rowBg,borderLeft:\`3px solid \${tc}\`}}>
+                              <td style={S.td}>{t.date}</td>
+                              <td style={S.td}>
+                                <span style={{...S.badge(tc),minWidth:62,textAlign:"center",display:"inline-block"}}>{tl}</span>
+                              </td>
+                              <td style={S.td}>
+                                {isDepWith
+                                  ? <span style={{color:textMuted,fontSize:11}}>–</span>
+                                  : <><b style={{color:textPrimary}}>{t.ticker}</b><div style={{fontSize:9,color:textMuted}}>{(tickerNames[t.ticker]||KNOWN_NAMES[t.ticker]||t.name||"")?.slice(0,16)}</div></>}
+                              </td>
+                              <td style={S.td}>
+                                <span style={{...S.badge(cc),minWidth:52,textAlign:"center",display:"inline-block"}}>{cl}</span>
+                              </td>
+                              <td style={S.td}>{isDepWith||t.type==="dividend"?"–":t.quantity}</td>
+                              <td style={S.td}>
+                                {t.type==="dividend"?fmt(t.dividendAmount,t.currency,2):isDepWith?fmt(t.amount||0,t.currency,0):\`\${t.price} \${t.currency}\`}
+                              </td>
+                              <td style={S.td}>{t.fee?\`\${t.fee} \${t.currency}\`:"–"}</td>
+                              <td style={{...S.td,fontWeight:600,color:t.type==="sell"||t.type==="withdraw"?"#f87171":"#22d3a0"}}>{fmt(totalCZK,"CZK",0)}</td>
+                              <td style={S.td}>
+                                <div style={{display:"flex",gap:4}}>
+                                  <button style={{...S.btn("outline"),padding:"3px 8px",fontSize:11}} onClick={()=>setEditTx({...t})}>✏</button>
+                                  <button style={{...S.btn("danger"),padding:"3px 8px"}} onClick={()=>{if(window.confirm("Smazat?"))setTransactions(prev=>prev.filter(x=>x.id!==t.id));}}>✕</button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Delete all modal */}
             {showDeleteAll && (
@@ -5039,7 +5109,8 @@ export default function App() {
              .filter(f=>f.key!=="divTax"||newTx.type==="dividend")
              .filter(f=>f.key!=="dividendAmount"||newTx.type==="dividend")
              .filter(f=>f.key!=="amount"||newTx.type==="deposit"||newTx.type==="withdraw")
-             .filter(f=>!["quantity","price","fee"].includes(f.key)||!["dividend","deposit","withdraw"].includes(newTx.type))
+             .filter(f=>!["ticker","name"].includes(f.key)||!["deposit","withdraw"].includes(newTx.type))
+             .filter(f=>!["quantity","price"].includes(f.key)||!["dividend","deposit","withdraw"].includes(newTx.type))
              .map(f=>(
               <div key={f.key} style={{marginBottom:10}}>
                 <div style={S.label}>{f.label}</div>
