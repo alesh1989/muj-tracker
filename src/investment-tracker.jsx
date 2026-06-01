@@ -208,16 +208,40 @@ const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, a
 
   if (points.length < 2) return <div style={{color:"#8b9fc0",fontSize:12,padding:20}}>Nedostatek dat</div>;
 
-  // Interpolate portfolio value across all historical points
+  // For each historical point, calculate actual portfolio value:
+  // holdings at that date × current live prices
+  // This shows real portfolio evolution based on actual positions held
   const lastPt = points[points.length-1];
   const liveValue = portfolioCurrentCZK > 0 ? portfolioCurrentCZK : lastPt.invested;
-  const totalInv = lastPt.invested || 1;
-  const overallGainRatio = liveValue / totalInv; // e.g. 3.48 if +248%
+  lastPt.current = liveValue;
+
+  // Recalculate current for each historical point using actual holdings × live prices
+  const allPointDates = points.map(pt => pt.date);
   points.forEach((pt, i) => {
-    if (i === points.length - 1) { pt.current = liveValue; return; }
-    // Each historical month: scale current value proportionally to invested amount
-    // This distributes the gain smoothly as capital was deployed
-    pt.current = pt.invested > 0 ? pt.invested * overallGainRatio : 0;
+    if (i === points.length - 1) return; // last point already set to liveValue
+    // Build holdings at this date
+    const holdings = {};
+    buys.filter(t => new Date(t.date) <= pt.date).forEach(t => {
+      holdings[t.ticker] = (holdings[t.ticker] || 0) + (t.quantity || 0);
+    });
+    transactions.filter(t => t.type === "sell" && new Date(t.date) <= pt.date).forEach(t => {
+      holdings[t.ticker] = (holdings[t.ticker] || 0) - (t.quantity || 0);
+    });
+    // Value holdings at current prices (we don't have historical prices)
+    let val = 0;
+    Object.entries(holdings).forEach(([ticker, qty]) => {
+      if (qty <= 0) return;
+      const p = prices[ticker];
+      if (p && p.price > 0) {
+        val += toCZK(qty * p.price, getTickerCurrency(ticker, p), rates);
+      } else {
+        // No price available: use cost basis for this ticker
+        const cost = buys.filter(t => t.ticker === ticker && new Date(t.date) <= pt.date)
+          .reduce((s, t) => s + toCZK(t.quantity * t.price + (t.fee||0), t.currency, rates), 0);
+        val += cost;
+      }
+    });
+    pt.current = val > 0 ? val : pt.invested;
   });
 
   // Benchmark: simulate buying same CZK amount of benchmark on same dates as portfolio buys
@@ -380,7 +404,7 @@ const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, a
         {benchmarkSeries.map(b=>(
           <span key={b.id}><span style={{color:b.color,fontWeight:700}}>╌╌</span> {b.label} (stejné cash flow)</span>
         ))}
-        <span style={{color:"#475569",fontStyle:"italic"}}>Benchmark = kolik byste měli kdybych místo akcií koupil index</span>
+        <span style={{color:"#475569",fontStyle:"italic"}}>{lang==="en"?"Benchmark = what you'd have if you bought the index instead":"Benchmark = kolik byste měli kdybych místo akcií koupil index"}</span>
       </div>
     </div>
   );
@@ -1231,7 +1255,7 @@ function CsvImportModal({ onClose, onImport, S }) {
   };
 
   const typeColor = { buy:"#10b981", sell:"#ef4444", dividend:"#8b5cf6" };
-  const typeLabel = { buy:"Nákup", sell:"Prodej", dividend:"Dividenda" };
+  const typeLabel = { buy:lang==="en"?"Buy":"Nákup", sell:lang==="en"?"Sell":"Prodej", dividend:lang==="en"?"Dividend":"Dividenda" };
   const catColor2 = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b", real_estate:"#f97316", cash:"#22d3a0" };
   const selectedCount = Object.values(selected).filter(Boolean).length;
 
@@ -1331,7 +1355,7 @@ function CsvImportModal({ onClose, onImport, S }) {
                 <thead style={{ position:"sticky", top:0, background:"#0d1424" }}>
                   <tr>
                     <th style={{ padding:"8px 10px", textAlign:"center", fontSize:10, color:"#8b9fc0", borderBottom:"1px solid #1e293b", width:36 }}>✓</th>
-                    {["Typ","Ticker","Kategorie","Datum","Množství","Cena","Měna","Poplatek","Poznámka"].map(h => (
+                    {[lang==="en"?"Type":"Typ",lang==="en"?"Ticker":"Ticker",lang==="en"?"Category":"Kategorie",lang==="en"?"Date":"Datum",lang==="en"?"Qty":"Množství",lang==="en"?"Price":"Cena",lang==="en"?"Currency":"Měna",lang==="en"?"Fee":"Poplatek",lang==="en"?"Notes":"Poznámka"].map(h => (
                       <th key={h} style={{ padding:"8px 10px", textAlign:"left", fontSize:10, color:"#8b9fc0", borderBottom:"1px solid #1e293b", whiteSpace:"nowrap", letterSpacing:"0.06em", textTransform:"uppercase" }}>{h}</th>
                     ))}
                   </tr>
@@ -1440,7 +1464,7 @@ function TipyTab({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, bo
                   const upsideNum = parseFloat(upside.toFixed(1));
                   // Recalculate rating based on real upside
                   const rating = upsideNum >= 30 ? "Silný nákup"
-                    : upsideNum >= 15 ? "Nákup"
+                    : upsideNum >= 15 ? (lang==="en"?"Buy":"Nákup")
                     : upsideNum >= 0  ? "Držet"
                     : upsideNum >= -15 ? "Podvážit"
                     : "Prodat";
@@ -1518,8 +1542,9 @@ ${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.rec
   };
 
   const upc=(p)=>p>=20?"#10b981":p>=10?"#22d3a0":p>=0?"#f59e0b":"#f87171";
-  const rbg=(r)=>r==="Silný nákup"?"#064e3b":r==="Nákup"?"#052e16":r==="Držet"?"#451a03":"#450a0a";
-  const rfg=(r)=>r==="Silný nákup"?"#10b981":r==="Nákup"?"#34d399":r==="Držet"?"#f59e0b":"#f87171";
+  const strongBuy=lang==="en"?"Strong Buy":"Silný nákup", buyL=lang==="en"?"Buy":"Nákup", holdL=lang==="en"?"Hold":"Držet";
+  const rbg=(r)=>r===strongBuy||r==="Silný nákup"?"#064e3b":r===buyL||r==="Nákup"?"#052e16":r===holdL||r==="Držet"?"#451a03":"#450a0a";
+  const rfg=(r)=>r===strongBuy||r==="Silný nákup"?"#10b981":r===buyL||r==="Nákup"?"#34d399":r===holdL||r==="Držet"?"#f59e0b":"#f87171";
 
   return (
     <div>
@@ -1535,7 +1560,7 @@ ${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.rec
         <RebalanceTab S={S} lang={lang} rates={rates} darkMode={darkMode} textPrimary={textPrimary} textMuted={textMuted} border={border} portfolio={portfolio}/>
       )}
 
-      {tipySubTab==="tips" ? <>
+      {tipySubTab==="tips" && <>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18,flexWrap:"wrap",gap:10}}>
         <div>
           <div style={{fontSize:18,fontWeight:800,color:textPrimary}}>💡 Tipy na podhodnocené akcie</div>
@@ -1689,8 +1714,8 @@ ${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.rec
             </div>
           )}
         </>
+      </>
       )}
-      </> : null}
     </div>
   );
 }
@@ -1802,7 +1827,7 @@ Odpověz POUZE validním JSON (bez markdown):
         <div style={{overflowX:"auto"}}>
           <table style={S.table}>
             <thead><tr>
-              {["Ticker","Název","Aktuální","Aktuální %","Cíl %","Rozdíl","Akce"].map(h=><th key={h} style={S.th}>{h}</th>)}
+              {[lang==="en"?"Ticker":"Ticker",lang==="en"?"Name":"Název",lang==="en"?"Current":"Aktuální",lang==="en"?"Current %":"Aktuální %",lang==="en"?"Target %":"Cíl %",lang==="en"?"Diff":"Rozdíl",lang==="en"?"Action":"Akce"].map(h=><th key={h} style={S.th}>{h}</th>)}
             </tr></thead>
             <tbody>
               {currentAlloc.sort((a,b)=>b.pct-a.pct).map(p=>{
@@ -2644,7 +2669,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům ${sy}-${cy}. P
                         ["P/E ratio", data.peRatio?.slice(-1)[0]?.toFixed(1)||"N/A", "#94a3b8"],
                         ["EBITDA (TTM)", `${data.ebitda?.slice(-1)[0]?.toFixed(1)}B`, "#94a3b8"],
                         ["Aktuální cena", data.currentPrice ? `${data.currentPrice} ${data.currency}` : "–", "#22d3a0"],
-                        ["Dividenda/akcie", `${data.dividendPerShare?.slice(-1)[0]?.toFixed(2)||"0"} ${data.currency}`, "#8b5cf6"],
+                        [(lang==="en"?"Dividend/share":"Dividenda/akcie"), `${data.dividendPerShare?.slice(-1)[0]?.toFixed(2)||"0"} ${data.currency}`, "#8b5cf6"],
                         ["Čistá marže", `${data.netMargin?.slice(-1)[0]?.toFixed(1)||"N/A"}%`, "#10b981"],
                         ["ROE", `${data.roe?.slice(-1)[0]?.toFixed(1)||"N/A"}%`, upC(data.roe?.slice(-1)[0]||0)],
                         ["Celkový dluh", `${data.totalDebt?.slice(-1)[0]?.toFixed(1)||"N/A"}B`, "#ef4444"],
@@ -2664,10 +2689,10 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům ${sy}-${cy}. P
               <ChartCard title="Revenue — tržby (mld. USD)" desc="Celkové roční tržby">
                 <MiniChart data={mkData("revenue")} type="bar" color="#6366f1" label="rv" height={165}/>
               </ChartCard>
-              <ChartCard title="EBITDA (mld. USD)" desc="Zisk před úroky, daněmi, odpisy a amortizací">
+              <ChartCard title="EBITDA (bn USD)" desc={lang==="en"?"Earnings before interest, taxes, depreciation & amortization":"Zisk před úroky, daněmi, odpisy a amortizací"}>
                 <MiniChart data={mkData("ebitda")} type="bar" color="#3b82f6" label="eb" height={165}/>
               </ChartCard>
-              <ChartCard title="Net Income — čistý zisk (mld. USD)" desc="Zisk po zdanění">
+              <ChartCard title={lang==="en"?"Net Income (bn USD)":"Net Income — čistý zisk (mld. USD)"} desc={lang==="en"?"Net profit after tax":"Zisk po zdanění"}>
                 <MiniChart data={mkData("netIncome")} type="combo" color="#10b981" label="ni" height={165}/>
               </ChartCard>
               <ChartCard title="Hrubá marže (%)" desc="Gross Margin — efektivita výroby/prodeje">
@@ -2737,7 +2762,7 @@ Každé pole musí mít přesně 10 hodnot odpovídající rokům ${sy}-${cy}. P
           {/* DIVIDENDY */}
           {activeChart==="dividends" && (
             <div>
-              <ChartCard title="Dividenda na akcii (USD/rok)" desc="Roční dividenda na akcii — sleduj konzistentní růst (Dividend Aristocrats)">
+              <ChartCard title={lang==="en"?"Dividend Per Share (USD/yr)":"Dividenda na akcii (USD/rok)"} desc={lang==="en"?"Annual dividend per share — track consistent growth":"Roční dividenda na akcii — sleduj konzistentní růst (Dividend Aristocrats)"}>
                 <MiniChart data={mkData("dividendPerShare")} type="bar" color="#8b5cf6" label="div" height={140}/>
               </ChartCard>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
@@ -3486,7 +3511,7 @@ const KNOWN_NAMES = {
 
 
 // ─── DRAWDOWN ANALYSIS ───────────────────────────────────────────────────────
-const DrawdownChart = ({ transactions, prices, rates, portfolioCurrentCZK=0 }) => {
+const DrawdownChart = ({ transactions, prices, rates, portfolioCurrentCZK=0, lang="cs" }) => {
   const buys = transactions.filter(t=>t.type==="buy").sort((a,b)=>new Date(a.date)-new Date(b.date));
   if (buys.length < 2) return null;
   // Check if we have any price data
@@ -3551,16 +3576,16 @@ const DrawdownChart = ({ transactions, prices, rates, portfolioCurrentCZK=0 }) =
     <div>
       <div style={{display:"flex",gap:20,marginBottom:10,flexWrap:"wrap"}}>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:9,color:"#5a7399",textTransform:"uppercase",letterSpacing:"0.08em"}}>Max. drawdown</div>
+          <div style={{fontSize:9,color:"#5a7399",textTransform:"uppercase",letterSpacing:"0.08em"}}>{lang==="en"?"Max. Drawdown":"Max. drawdown"}</div>
           <div style={{fontSize:16,fontWeight:700,color:"#f87171"}}>{maxDD.toFixed(1)}%</div>
           <div style={{fontSize:9,color:"#5a7399"}}>{maxDDDate?.label}</div>
         </div>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:9,color:"#5a7399",textTransform:"uppercase",letterSpacing:"0.08em"}}>Aktuální DD</div>
+          <div style={{fontSize:9,color:"#5a7399",textTransform:"uppercase",letterSpacing:"0.08em"}}>{lang==="en"?"Current DD":"Aktuální DD"}</div>
           <div style={{fontSize:16,fontWeight:700,color:currentDD<-5?"#f87171":currentDD<-2?"#f59e0b":"#22d3a0"}}>{currentDD.toFixed(1)}%</div>
         </div>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:9,color:"#5a7399",textTransform:"uppercase",letterSpacing:"0.08em"}}>Od ATH</div>
+          <div style={{fontSize:9,color:"#5a7399",textTransform:"uppercase",letterSpacing:"0.08em"}}>{lang==="en"?"From ATH":"Od ATH"}</div>
           <div style={{fontSize:16,fontWeight:700,color:"#8b9fc0"}}>{Math.abs(currentDD)<0.1?"✓ ATH":""+Math.abs(currentDD).toFixed(1)+"%"}</div>
         </div>
       </div>
@@ -4691,7 +4716,7 @@ export default function App() {
     const tx = { ...newTx, id:`t${Date.now()}`,
       portfolioId: activePortfolioId,
       ticker: isFlow ? (newTx.type === "deposit" ? "VKLAD" : "VÝBĚR") : newTx.ticker,
-      name: isFlow ? (newTx.type === "deposit" ? "Vklad hotovosti" : "Výběr hotovosti") : newTx.name,
+      name: isFlow ? (newTx.type === "deposit" ? (lang==="en"?"Cash Deposit":"Vklad hotovosti") : (lang==="en"?"Cash Withdrawal":"Výběr hotovosti")) : newTx.name,
       category: isFlow ? "cash" : newTx.category,
       quantity: parseFloat(newTx.quantity)||0,
       price: parseFloat(newTx.price)||0,
@@ -5178,7 +5203,7 @@ export default function App() {
                 <div style={{...S.card,marginBottom:14}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
                     <div style={S.sectionTitle}>Diverzifikace — sektory</div>
-                    <div style={{fontSize:11,color:textMuted}}>{sEntries.length} sektorů · pouze akcie</div>
+                    <div style={{fontSize:11,color:textMuted}}>{lang==="en"?`${sEntries.length} sectors · stocks only`:`${sEntries.length} sektorů · pouze akcie`}</div>
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"auto 1fr",gap:20,alignItems:"center"}}>
                     {/* Donut */}
@@ -5416,7 +5441,7 @@ export default function App() {
               if(!hasData) return null;
               return (
                 <div style={{...S.card,marginBottom:12}}>
-                  <div style={S.sectionTitle}>{lang==="en"?"Portfolio Metrics":"Fundamentální metriky portfolia"}</div>
+                  <div style={S.sectionTitle}>{lang==="en"?"Portfolio Metrics":lang==="en"?"Portfolio Metrics":"Fundamentální metriky portfolia"}</div>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:10}}>
                     {metrics.map((m,i)=>(
                       <div key={i} title={m.info} style={{background:darkMode?"#0a0f1e":"#f8fafc",borderRadius:10,padding:"10px 12px",border:`1px solid ${m.accent}33`,textAlign:"center"}}>
