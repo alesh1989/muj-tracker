@@ -208,19 +208,16 @@ const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, a
 
   if (points.length < 2) return <div style={{color:"#8b9fc0",fontSize:12,padding:20}}>Nedostatek dat</div>;
 
-  // Interpolate current value across all points based on live gain ratio
+  // Interpolate portfolio value across all historical points
   const lastPt = points[points.length-1];
   const liveValue = portfolioCurrentCZK > 0 ? portfolioCurrentCZK : lastPt.invested;
-  lastPt.current = liveValue;
-  // Apply proportional gain to historical points so the line grows smoothly
-  const totalInvested = lastPt.invested > 0 ? lastPt.invested : 1;
-  const gainRatio = liveValue / totalInvested; // e.g. 3.48 if +248%
+  const totalInv = lastPt.invested || 1;
+  const overallGainRatio = liveValue / totalInv; // e.g. 3.48 if +248%
   points.forEach((pt, i) => {
-    if (i === points.length - 1) return; // keep last point as live value
-    if (pt.invested > 0 && gainRatio > 0) {
-      // Scale: assume gain accumulated proportionally to invested amount over time
-      pt.current = pt.invested * gainRatio;
-    }
+    if (i === points.length - 1) { pt.current = liveValue; return; }
+    // Each historical month: scale current value proportionally to invested amount
+    // This distributes the gain smoothly as capital was deployed
+    pt.current = pt.invested > 0 ? pt.invested * overallGainRatio : 0;
   });
 
   // Benchmark: simulate buying same CZK amount of benchmark on same dates as portfolio buys
@@ -1391,7 +1388,7 @@ function CsvImportModal({ onClose, onImport, S }) {
 
 
 // ─── TIPY TAB ────────────────────────────────────────────────────────────────
-function TipyTab({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, border }) {
+function TipyTab({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, border, portfolio }) {
   const [tips, setTips] = useState(null);
   const [loadingTips, setLoadingTips] = useState(false);
   const [selectedTip, setSelectedTip] = useState(null);
@@ -1400,6 +1397,7 @@ function TipyTab({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, bo
   const [sector, setSector] = useState("all");
   const [errorMsg, setErrorMsg] = useState("");
 
+  const [tipySubTab, setTipySubTab] = useState("tips"); // tips | rebalance
   const SECTORS = [
     ["all","Vše"],["tech","Technologie"],["finance","Finance"],["health","Zdravotnictví"],
     ["energy","Energie"],["consumer","Spotřební zboží"],["industrial","Průmysl"],["reit","REIT"],
@@ -1525,6 +1523,19 @@ ${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.rec
 
   return (
     <div>
+      {/* Sub-tab navigation */}
+      <div style={{display:"flex",gap:8,marginBottom:20}}>
+        {[["tips","💡 Tipy na akcie"],["rebalance","⚖ Rebalancování"]].map(([id,label])=>(
+          <button key={id} style={{...S.btn(tipySubTab===id?"primary":"outline"),padding:"8px 20px",fontWeight:tipySubTab===id?700:400}}
+            onClick={()=>setTipySubTab(id)}>{label}</button>
+        ))}
+      </div>
+
+      {tipySubTab==="rebalance" && (
+        <RebalanceTab S={S} lang={lang} rates={rates} darkMode={darkMode} textPrimary={textPrimary} textMuted={textMuted} border={border} portfolio={portfolio}/>
+      )}
+
+      {tipySubTab==="tips" && <>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18,flexWrap:"wrap",gap:10}}>
         <div>
           <div style={{fontSize:18,fontWeight:800,color:textPrimary}}>💡 Tipy na podhodnocené akcie</div>
@@ -1678,7 +1689,159 @@ ${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.rec
             </div>
           )}
         </>
+      </>
       )}
+    </div>
+  );
+}
+
+
+// ─── REBALANCE TAB ────────────────────────────────────────────────────────────
+function RebalanceTab({ S, lang, rates, darkMode, textPrimary, textMuted, border, portfolio }) {
+  const [targetAlloc, setTargetAlloc] = useState({});
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState(null);
+  const [aiError, setAiError] = useState("");
+
+  const positions = (portfolio?.positions || []).filter(p => p.totalQty > 0 && p.currentValueCZK > 0);
+  const totalCZK = positions.reduce((s, p) => s + p.currentValueCZK, 0);
+
+  // Current allocations
+  const currentAlloc = positions.map(p => ({
+    ...p,
+    pct: totalCZK > 0 ? (p.currentValueCZK / totalCZK) * 100 : 0,
+    target: targetAlloc[p.ticker] ?? Math.round((p.currentValueCZK / totalCZK) * 1000) / 10,
+  }));
+
+  const targetSum = currentAlloc.reduce((s, p) => s + (parseFloat(targetAlloc[p.ticker]) || p.pct), 0);
+
+  const getAiSuggestions = async () => {
+    if (!positions.length) return;
+    setAiLoading(true); setAiError(""); setAiSuggestion(null);
+    try {
+      const posStr = positions.slice(0, 15).map(p =>
+        `${p.ticker}: ${(p.currentValueCZK/totalCZK*100).toFixed(1)}%, gain ${p.gainPct?.toFixed(1)||"?"}%`
+      ).join(", ");
+      const resp = await fetch("/api/claude", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:1500,
+          messages:[{ role:"user", content:
+            `Analyzuj toto portfolio a navrhni rebalancování. Pozice: ${posStr}. Celková hodnota: ${Math.round(totalCZK/1000)}k Kč.
+Odpověz POUZE validním JSON (bez markdown):
+{"summary":"2-3 věty o celkovém stavu portfolia","suggestions":[{"ticker":"X","action":"Navýšit/Snížit/Prodat/Přidat","reason":"Proč","priority":"vysoká/střední/nízká"}],"risks":["riziko1","riziko2"],"targetNote":"Obecný komentář k cílové alokaci"}`
+          }]
+        })
+      });
+      const json = await resp.json();
+      const text = json.content?.[0]?.text || "";
+      setAiSuggestion(JSON.parse(text.replace(/```json|```/g,"").trim()));
+    } catch(e) { setAiError("Chyba při načítání AI analýzy: " + e.message); }
+    setAiLoading(false);
+  };
+
+  const priorityColor = { "vysoká":"#ef4444", "střední":"#f59e0b", "nízká":"#10b981" };
+
+  if (!positions.length) return (
+    <div style={{textAlign:"center",padding:40,color:textMuted}}>
+      <div style={{fontSize:32,marginBottom:8}}>⚖</div>
+      <div>Nejsou k dispozici žádné pozice pro rebalancování</div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{fontSize:18,fontWeight:800,color:textPrimary,marginBottom:4}}>⚖ Rebalancování portfolia</div>
+      <div style={{fontSize:12,color:textMuted,marginBottom:20}}>Nastavte cílovou alokaci a získejte AI návrhy na změny</div>
+
+      {/* AI návrhy */}
+      <div style={{...S.card,marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <div style={S.sectionTitle}>🤖 AI návrhy na změny</div>
+          <button style={{...S.btn("primary"),padding:"7px 16px"}} onClick={getAiSuggestions} disabled={aiLoading}>
+            {aiLoading?"⏳ Analyzuji...":"✨ Vygenerovat návrhy"}
+          </button>
+        </div>
+        {aiError && <div style={{color:"#ef4444",fontSize:12}}>{aiError}</div>}
+        {aiSuggestion && <>
+          <div style={{fontSize:12,color:textMuted,marginBottom:12,lineHeight:1.6,padding:"10px 12px",background:darkMode?"#0a0f1e":"#f8fafc",borderRadius:8}}>
+            {aiSuggestion.summary}
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
+            {(aiSuggestion.suggestions||[]).map((s,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",background:darkMode?"#0d1424":"#f8fafc",borderRadius:8,border:`1px solid ${border}`}}>
+                <span style={{fontWeight:700,color:textPrimary,minWidth:50}}>{s.ticker}</span>
+                <span style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,background:s.action?.includes("Navýšit")||s.action?.includes("Přidat")?"#10b98122":"#ef444422",color:s.action?.includes("Navýšit")||s.action?.includes("Přidat")?"#10b981":"#ef4444"}}>
+                  {s.action}
+                </span>
+                <span style={{fontSize:11,color:textMuted,flex:1}}>{s.reason}</span>
+                <span style={{fontSize:10,color:priorityColor[s.priority]||textMuted,fontWeight:700,whiteSpace:"nowrap"}}>{s.priority}</span>
+              </div>
+            ))}
+          </div>
+          {aiSuggestion.risks?.length > 0 && (
+            <div style={{fontSize:11,color:textMuted,padding:"8px 12px",background:darkMode?"#1e0a0a":"#fff5f5",borderRadius:8,border:"1px solid #ef444433"}}>
+              ⚠ <b>Rizika:</b> {aiSuggestion.risks.join(" · ")}
+            </div>
+          )}
+        </>}
+        {!aiSuggestion && !aiLoading && !aiError && (
+          <div style={{textAlign:"center",padding:20,color:textMuted,fontSize:12}}>
+            Klikněte na "Vygenerovat návrhy" pro AI analýzu vašeho portfolia
+          </div>
+        )}
+      </div>
+
+      {/* Aktuální vs cílová alokace */}
+      <div style={S.card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <div style={S.sectionTitle}>📊 Aktuální vs. cílová alokace</div>
+          <span style={{fontSize:11,color:targetSum>101||targetSum<99?"#ef4444":textMuted}}>
+            Součet cílů: <b>{targetSum.toFixed(1)}%</b> {targetSum>101||targetSum<99?" ⚠ ≠ 100%":"✓"}
+          </span>
+        </div>
+        <div style={{overflowX:"auto"}}>
+          <table style={S.table}>
+            <thead><tr>
+              {["Ticker","Název","Aktuální","Aktuální %","Cíl %","Rozdíl","Akce"].map(h=><th key={h} style={S.th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {currentAlloc.sort((a,b)=>b.pct-a.pct).map(p=>{
+                const tgt = parseFloat(targetAlloc[p.ticker]??p.pct.toFixed(1)) || 0;
+                const diff = tgt - p.pct;
+                const diffCZK = (diff/100)*totalCZK;
+                const action = Math.abs(diff)<0.5?"✓ OK":diff>0?"↑ Navýšit":"↓ Snížit";
+                const actionColor = Math.abs(diff)<0.5?"#10b981":diff>0?"#6366f1":"#f59e0b";
+                return (
+                  <tr key={p.ticker}>
+                    <td style={{...S.td,fontWeight:700,color:textPrimary}}>{p.ticker}</td>
+                    <td style={{...S.td,color:textMuted,fontSize:11}}>{(p.name||"").slice(0,18)}</td>
+                    <td style={S.td}>{new Intl.NumberFormat("cs-CZ",{style:"currency",currency:"CZK",maximumFractionDigits:0}).format(p.currentValueCZK)}</td>
+                    <td style={S.td}>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <div style={{width:60,height:6,background:darkMode?"#1e293b":"#e2e8f0",borderRadius:3,overflow:"hidden"}}>
+                          <div style={{width:`${Math.min(100,p.pct)}%`,height:"100%",background:"#6366f1",borderRadius:3}}/>
+                        </div>
+                        <span style={{fontSize:11}}>{p.pct.toFixed(1)}%</span>
+                      </div>
+                    </td>
+                    <td style={S.td}>
+                      <input type="number" min="0" max="100" step="0.5"
+                        value={targetAlloc[p.ticker]??p.pct.toFixed(1)}
+                        onChange={e=>setTargetAlloc(prev=>({...prev,[p.ticker]:e.target.value}))}
+                        style={{...S.input,width:65,padding:"4px 6px",textAlign:"right"}}/>
+                      <span style={{fontSize:10,color:textMuted,marginLeft:2}}>%</span>
+                    </td>
+                    <td style={{...S.td,color:Math.abs(diff)<0.5?"#10b981":diff>0?"#6366f1":"#f59e0b",fontWeight:600,fontSize:11}}>
+                      {diff>=0?"+":""}{diff.toFixed(1)}% ({diffCZK>=0?"+":""}{Math.round(diffCZK/1000)}k Kč)
+                    </td>
+                    <td style={{...S.td,color:actionColor,fontWeight:700,fontSize:11}}>{action}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3475,8 +3638,22 @@ function DigrinCalendar({ transactions, rates, tickerNames, S, textMuted, textPr
       const g = (b.getFullYear()-a.getFullYear())*12 + b.getMonth()-a.getMonth();
       if (g > 0) gaps.push(g);
     }
-    const freq = gaps.length ? Math.round(gaps.reduce((s,g)=>s+g,0)/gaps.length) : 3; // default quarterly
-    const clampedFreq = Math.max(1, Math.min(12, freq));
+    // Determine payment frequency from historical gaps
+    // If only 1 payment exists, can't detect frequency - use annual (12) as safe default
+    // If 2+ payments, use median gap (not mean, to avoid outliers)
+    let freq;
+    if (gaps.length === 0) {
+      freq = 12; // only 1 payment ever → assume annual
+    } else if (gaps.length === 1) {
+      freq = gaps[0]; // exactly 2 payments → use that gap directly
+    } else {
+      // Median of gaps for robustness
+      const sorted = [...gaps].sort((a,b)=>a-b);
+      freq = sorted[Math.floor(sorted.length/2)];
+    }
+    // Snap to common intervals: 1, 2, 3, 4, 6, 12 months
+    const commonIntervals = [1,2,3,4,6,12];
+    const clampedFreq = commonIntervals.reduce((prev,curr) => Math.abs(curr-freq)<Math.abs(prev-freq)?curr:prev);
 
     // Average amount (last 4 payments)
     const last4 = txs.slice(-4);
@@ -4396,7 +4573,7 @@ export default function App() {
         }
       } else if (t.type === "dividend" && t.dividendAmount) {
         // dividendAmount is already in CZK (converted at entry time)
-        totalDividendsCZK += Math.max(0,(t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates));
+        totalDividendsCZK += ((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates));
       } else if (t.type === "deposit") {
         // Deposits don't count as investment cost - they're cash inflows
       } else if (t.type === "withdraw") {
@@ -5536,7 +5713,7 @@ export default function App() {
                               <td style={S.td}>
                                 <span style={{...S.badge(cc),minWidth:52,textAlign:"center",display:"inline-block"}}>{cl}</span>
                               </td>
-                              <td style={S.td}>{isDepWith||t.type==="dividend"?"–":t.quantity}</td>
+                              <td style={S.td}>{isDepWith||t.type==="dividend"?"–":typeof t.quantity==="number"?t.quantity.toLocaleString("cs-CZ",{minimumFractionDigits:0,maximumFractionDigits:6}):t.quantity}</td>
                               <td style={S.td}>
                                 {t.type==="dividend"?(t.currency==="CZK"||!t.price?`${getDivCZK(t).toLocaleString("cs-CZ",{minimumFractionDigits:0,maximumFractionDigits:2})} Kč`:`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency}`):isDepWith?fmt(t.amount||0,t.currency,0):`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency==="CZK"?"Kč":t.currency}`}
                               </td>
@@ -5615,14 +5792,14 @@ export default function App() {
               <div style={S.sectionTitle}>{lang==="en"?"Cash Flow History":"Historie vkladů a výběrů"}</div>
               <table style={S.table}>
                 <thead><tr>
-                  {[lang==="en"?"Date":"Datum",lang==="en"?"Type":"Typ",lang==="en"?"Amount":"Částka",lang==="en"?"Note":"Poznámka"].map(h=><th key={h} style={S.th}>{h}</th>)}
+                  {[lang==="en"?"Date":"Datum",lang==="en"?"Type":"Typ",lang==="en"?"Net Amount":"Čistá částka",lang==="en"?"Note":"Poznámka"].map(h=><th key={h} style={S.th}>{h}</th>)}
                 </tr></thead>
                 <tbody>
                   {activeTransactions.filter(t=>t.type==="deposit"||t.type==="withdraw").sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>(
                     <tr key={t.id}>
                       <td style={S.td}>{fmtDate(t.date)}</td>
                       <td style={S.td}><span style={S.badge(t.type==="deposit"?"#22d3a0":"#f87171")}>{t.type==="deposit"?(lang==="en"?"Deposit":"Vklad"):(lang==="en"?"Withdrawal":"Výběr")}</span></td>
-                      <td style={{...S.td,fontWeight:600,color:t.type==="deposit"?"#22d3a0":"#f87171"}}>{fmt(t.amount||0,t.currency,0)} {t.currency}</td>
+                      <td style={{...S.td,fontWeight:600,color:t.type==="deposit"?"#22d3a0":"#f87171"}}>{fmt(Math.max(0,(t.amount||0)-(t.fee||0)),t.currency,0)} {t.currency}</td>
                       <td style={{...S.td,color:textMuted}}>{t.notes||"–"}</td>
                     </tr>
                   ))}
@@ -5722,7 +5899,7 @@ export default function App() {
 
         {/* ─── TIPY ──────────────────────────────────────────────────────────────── */}
         {tab === "tipy" && (
-          <TipyTab S={S} lang={lang} rates={rates} darkMode={darkMode}
+          <TipyTab S={S} lang={lang} rates={rates} darkMode={darkMode} portfolio={portfolio}
             textPrimary={textPrimary} textMuted={textMuted} textSec={textSec}
             border={border} bgCard={bgCard} />
         )}
@@ -6046,7 +6223,6 @@ export default function App() {
                   // Generate report as HTML and open print dialog
                   const reportDate = new Date().toLocaleDateString("cs-CZ");
                   const reportYearDivs = activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===reportCalYear);
-                  const reportYearDivTotal = reportYearDivs.reduce((s,t)=>s+Math.max(0,(t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),0);
                   const rows = portfolio.positions.sort((a,b)=>b.currentValueCZK-a.currentValueCZK).map(p=>`
                     <tr>
                       <td>${p.ticker}</td>
@@ -6056,7 +6232,7 @@ export default function App() {
                       <td style="text-align:right;color:${p.gainPct>=0?"#16a34a":"#dc2626"}">${fmtPct(p.gainPct)}</td>
                       <td style="text-align:right">${p.annualizedReturn?fmtPct(p.annualizedReturn):"–"}</td>
                     </tr>`).join("");
-                  const divRows = activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===reportCalYear)
+                  const divRows = (reportYearDivs||activeTransactions.filter(t=>t.type==="dividend"))
                     .sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>`
                     <tr>
                       <td>${t.date}</td>
@@ -6078,7 +6254,7 @@ export default function App() {
                       @media print{body{padding:20px}}
                     </style></head><body>
                     <h1>📈 InvestTrack — Výroční Report ${reportCalYear}</h1>
-                    <p style="color:#64748b">Vygenerováno: ${reportDate} · ${portfolios.find(p=>p.id===activePortfolioId)?.name||"Portfolio"}</p>
+                    <p style="color:#64748b">${reportDate} · ${portfolios.find(p=>p.id===activePortfolioId)?.name||"Portfolio"}</p>
                     <div>
                       <div class="stat"><div class="stat-label">Aktuální hodnota</div><div class="stat-value">${fmt(portfolio.totalCurrentCZK,"CZK",0)}</div></div>
                       <div class="stat"><div class="stat-label">Investováno</div><div class="stat-value">${fmt(portfolio.totalInvestedCZK,"CZK",0)}</div></div>
