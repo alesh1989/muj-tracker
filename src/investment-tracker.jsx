@@ -4836,8 +4836,12 @@ export default function App() {
                   ].map((opt,i)=>(
                     <button key={i} style={{...S.btn("danger"),display:"block",width:"100%",textAlign:"left",marginBottom:8,padding:"10px 14px"}}
                       onClick={()=>{
-                        const count=activeTransactions.filter(t=>opt.types.includes(t.type)).length;
-                        if(!window.confirm(`⚠ Opravdu smazat ${count} transakcí (${opt.label})?\n\nTato akce je nevratná.`)) return;
+                        const count=activeTransactions.filter(t=>{
+                          const pid=t.portfolioId||activePortfolioId;
+                          if(pid!==activePortfolioId) return false;
+                          return opt.types.includes(t.type);
+                        }).length;
+                        if(!window.confirm(`⚠ Opravdu smazat ${count} transakcí (${opt.label})? Tato akce je nevratná.`)) return;
                         setTransactions(prev=>prev.filter(t=>{
                           const pid=t.portfolioId||activePortfolioId;
                           if(pid!==activePortfolioId) return true;
@@ -5495,13 +5499,8 @@ export default function App() {
                       if(f.key==="dividendPerShare"||f.key==="divTax"){
                         const perShare=parseFloat(f.key==="dividendPerShare"?e.target.value:newTx.dividendPerShare)||0;
                         const tax=parseFloat(f.key==="divTax"?e.target.value:newTx.divTax)||15;
-                        // Počítej akcie ke dni dividendy (nákupy − prodeje před tímto datem)
-                        const divDate=newTx.date||new Date().toISOString().slice(0,10);
-                        const txBefore=activeTransactions.filter(t=>t.ticker===newTx.ticker&&t.date<=divDate);
-                        const bQ=txBefore.filter(t=>t.type==="buy").reduce((s,t)=>s+(t.quantity||0),0);
-                        const sQ=txBefore.filter(t=>t.type==="sell").reduce((s,t)=>s+(t.quantity||0),0);
-                        const holdQty=Math.max(0,bQ-sQ);
-                        const qty=parseFloat(newTx.quantity)||holdQty||1;
+                        const holdQty=activeTransactions.filter(t=>["buy","sell"].includes(t.type)&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.type==="buy"?1:-1)*(t.quantity||0),0);
+                        const qty=parseFloat(newTx.quantity)||Math.max(0,holdQty)||1;
                         const net=toCZK(perShare*qty*(1-tax/100),newTx.currency,rates);
                         setNewTx(p=>({...p,[f.key]:e.target.value,dividendAmount:net.toFixed(2)}));
                       }
@@ -5529,11 +5528,8 @@ export default function App() {
                   const ps=parseFloat(newTx.dividendPerShare)||0;
                   const tax=parseFloat(newTx.divTax)||15;
                   const divDate=newTx.date||new Date().toISOString().slice(0,10);
-                  const txBefore=activeTransactions.filter(t=>t.ticker===newTx.ticker&&t.date<=divDate);
-                  const bQ=txBefore.filter(t=>t.type==="buy").reduce((s,t)=>s+(t.quantity||0),0);
-                  const sQ=txBefore.filter(t=>t.type==="sell").reduce((s,t)=>s+(t.quantity||0),0);
-                  const hq=Math.max(0,bQ-sQ);
-                  const qty=parseFloat(newTx.quantity)||hq||0;
+                  const hq=activeTransactions.filter(t=>["buy","sell"].includes(t.type)&&t.ticker===newTx.ticker&&t.date<=divDate).reduce((s,t)=>s+(t.type==="buy"?1:-1)*(t.quantity||0),0);
+                  const qty=parseFloat(newTx.quantity)||Math.max(0,hq)||0;
                   const gross=ps*qty;
                   const net=toCZK(gross*(1-tax/100),newTx.currency,rates);
                   return `${qty} ks × ${ps} = ${gross.toFixed(2)} ${newTx.currency} → ${net.toFixed(0)} Kč (daň ${tax}%)`;
@@ -5546,13 +5542,9 @@ export default function App() {
                 if(newTx.type==="dividend"&&newTx.dividendPerShare){
                   const perShare=parseFloat(newTx.dividendPerShare)||0;
                   const tax=parseFloat(newTx.divTax)||15;
-                  // Akcie ke dni dividendy: nákupy − prodeje
-                  const divDate=newTx.date||new Date().toISOString().slice(0,10);
-                  const txBefore=activeTransactions.filter(t=>t.ticker===newTx.ticker&&t.date<=divDate);
-                  const bQ=txBefore.filter(t=>t.type==="buy").reduce((s,t)=>s+(t.quantity||0),0);
-                  const sQ=txBefore.filter(t=>t.type==="sell").reduce((s,t)=>s+(t.quantity||0),0);
-                  const hq=Math.max(0,bQ-sQ);
-                  const qty=parseFloat(newTx.quantity)||hq||1;
+                  const divDate2=newTx.date||new Date().toISOString().slice(0,10);
+                  const hq=activeTransactions.filter(t=>["buy","sell"].includes(t.type)&&t.ticker===newTx.ticker&&t.date<=divDate2).reduce((s,t)=>s+(t.type==="buy"?1:-1)*(t.quantity||0),0);
+                  const qty=parseFloat(newTx.quantity)||Math.max(0,hq)||1;
                   divAmount=toCZK(perShare*qty*(1-tax/100),newTx.currency,rates);
                 }
                 // Check for duplicate
@@ -5571,24 +5563,23 @@ export default function App() {
                   dividendPerShare:parseFloat(newTx.dividendPerShare)||0,
                   amount:parseFloat(newTx.amount)||0};
                 setTransactions(prev=>{
-                  const withNew=[...prev,tx];
-                  // Bug fix: při zpětném přidání nákupu přepočítej dividendy pro tento ticker
-                  // kde je uložena dividendPerShare (máme data pro přepočet)
-                  if(tx.type==="buy"&&tx.ticker){
-                    return withNew.map(t=>{
-                      if(t.type!=="dividend"||t.ticker!==tx.ticker||!t.dividendPerShare) return t;
-                      const divDate=t.date;
-                      const allForTicker=withNew.filter(x=>x.ticker===tx.ticker&&(x.portfolioId||activePortfolioId)===activePortfolioId&&x.date<=divDate);
-                      const bQ=allForTicker.filter(x=>x.type==="buy").reduce((s,x)=>s+(x.quantity||0),0);
-                      const sQ=allForTicker.filter(x=>x.type==="sell").reduce((s,x)=>s+(x.quantity||0),0);
-                      const ownedQty=Math.max(0,bQ-sQ);
-                      const usedQty=t.quantity||ownedQty||1;
-                      const tax=t.divTax!=null?parseFloat(t.divTax):15;
-                      const newAmt=toCZK((t.dividendPerShare||0)*usedQty*(1-tax/100),t.currency||"CZK",rates);
-                      return {...t,dividendAmount:newAmt,dividendAmountCZK:newAmt};
+                  const updated=[...prev,tx];
+                  // Bug 3 fix: retroactively recalculate existing dividends for same ticker
+                  if(tx.type==="buy"){
+                    return updated.map(t=>{
+                      if(t.type==="dividend"&&t.ticker===tx.ticker&&t.dividendPerShare&&t.dividendPerShare>0){
+                        const divDate=t.date||"";
+                        const holdQty=updated.filter(u=>["buy","sell"].includes(u.type)&&u.ticker===tx.ticker&&u.date<=divDate)
+                          .reduce((s,u)=>s+(u.type==="buy"?1:-1)*(u.quantity||0),0);
+                        const qty=Math.max(0,holdQty)||1;
+                        const tax=t.divTax||15;
+                        const newAmt=toCZK(t.dividendPerShare*qty*(1-tax/100),t.currency||"CZK",rates);
+                        return {...t,dividendAmount:newAmt,dividendAmountCZK:newAmt};
+                      }
+                      return t;
                     });
                   }
-                  return withNew;
+                  return updated;
                 });
                 if(tx.ticker&&!["VKLAD","VÝBĚR",""].includes(tx.ticker)){
                   if(!prices[tx.ticker]) setPrices(prev=>({...prev,[tx.ticker]:{price:tx.price||0,currency:tx.currency||"USD",change1d:0}}));
