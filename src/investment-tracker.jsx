@@ -175,133 +175,205 @@ const BarChart = ({ data }) => {
 
 // ─── GROWTH CHART (from first transaction → now) ──────────────────────────────
 const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, activeBenchmarks=[], benchmarkOptions=[], portfolioCurrentCZK=0 }) => {
-  const buys = transactions.filter(t => t.type === "buy").sort((a,b) => new Date(a.date)-new Date(b.date));
+  const [tooltip, setTooltip] = useState(null);
+  const svgRef = useRef(null);
+
+  const allTx = transactions.filter(t => ["buy","sell","deposit","withdraw"].includes(t.type))
+    .sort((a,b) => new Date(a.date)-new Date(b.date));
+  const buys = allTx.filter(t => t.type === "buy");
   if (!buys.length) return <div style={{color:"#8b9fc0",fontSize:12}}>Žádné transakce</div>;
 
   const firstDate = new Date(buys[0].date);
   const now = new Date();
 
+  // Build monthly points: invested = cumulative cost basis (buy - sell proceeds)
+  // current = invested (we only have live prices, not historical)
+  // We show "invested" accurately, and "current" only for the last point (live prices)
   const points = [];
   let cursor = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
   while (cursor <= now) {
     if (!yearFilter || cursor.getFullYear() === yearFilter) {
       const txSoFar = buys.filter(t => new Date(t.date) <= cursor);
+      const sellsSoFar = transactions.filter(t => t.type==="sell" && new Date(t.date) <= cursor);
+      // Cost basis = money spent on buys
       let invested = 0;
-      const holdings = {};
-      txSoFar.forEach(t => {
-        invested += toCZK(t.quantity*t.price + (t.fee||0), t.currency, rates);
-        holdings[t.ticker] = (holdings[t.ticker]||0) + t.quantity;
-      });
-      // For current month: use live prices. For historical: use invested cost as proxy
-      const isCurrentMonth = cursor.getFullYear()===now.getFullYear() && cursor.getMonth()===now.getMonth();
-      let current = 0;
-      if (isCurrentMonth) {
-        // Use actual current prices
-        Object.entries(holdings).forEach(([ticker, qty]) => {
-          const p = prices[ticker];
-          if (p) current += toCZK(qty*p.price, getTickerCurrency(ticker,p), rates);
-        });
-      } else {
-        // For past months: estimate value as invested × (current_value/total_invested ratio)
-        // This gives a proportional estimate without needing historical prices
-        current = invested; // will be scaled after all points computed
-      }
-      points.push({ label:`${cursor.getMonth()+1}/${String(cursor.getFullYear()).slice(2)}`, invested, current, date:new Date(cursor) });
+      txSoFar.forEach(t => { invested += toCZK(t.quantity*t.price + (t.fee||0), t.currency, rates); });
+      // Subtract sell proceeds (reduces cost basis)
+      sellsSoFar.forEach(t => { invested -= toCZK(t.quantity*t.price - (t.fee||0), t.currency, rates); });
+      invested = Math.max(0, invested);
+      points.push({ label:`${cursor.getMonth()+1}/${String(cursor.getFullYear()).slice(2)}`, invested, current: invested, date:new Date(cursor) });
     }
     cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
   }
-  // Use actual portfolio value from parent for last point
-  const totalInvestedAll = points.length > 0 ? points[points.length-1].invested : 0;
-  const actualCurrentVal = portfolioCurrentCZK > 0 ? portfolioCurrentCZK : (points[points.length-1]?.current || 0);
-  const ratio = totalInvestedAll > 0 && actualCurrentVal > 0 ? actualCurrentVal / totalInvestedAll : 1;
-  if (points.length > 1) {
-    points.forEach((pt, i) => {
-      // Scale each point: historical value ∝ amount invested × current ratio
-      pt.current = pt.invested * ratio;
-    });
-    // Set last point to exact current value
-    points[points.length-1].current = actualCurrentVal;
-  }
 
-  if (points.length < 2) return <div style={{color:"#8b9fc0",fontSize:12,padding:20}}>Nedostatek dat pro zvolený rok</div>;
+  if (points.length < 2) return <div style={{color:"#8b9fc0",fontSize:12,padding:20}}>Nedostatek dat</div>;
 
-  // Compute benchmark normalized values
+  // Last point = live portfolio value
+  const lastPt = points[points.length-1];
+  const liveValue = portfolioCurrentCZK > 0 ? portfolioCurrentCZK : lastPt.invested;
+  lastPt.current = liveValue;
+
+  // Benchmark: simulate buying same CZK amount of benchmark on same dates as portfolio buys
+  // This gives a fair "what if I bought SPY instead" comparison
   const benchmarkSeries = benchmarkOptions
     .filter(b => activeBenchmarks.includes(b.id) && benchmarks[b.id]?.length)
     .map(b => {
-      const bData = benchmarks[b.id];
+      const bData = benchmarks[b.id]; // [{t, c}] monthly candles
+      if (!bData.length) return null;
+
+      // For each buy transaction, find benchmark price at that date and simulate buying
+      // benchmark units worth the same CZK amount
+      let benchUnits = 0;
+      let benchCost = 0;
+      buys.forEach(tx => {
+        const txDate = new Date(tx.date);
+        // Find closest benchmark candle on or before tx date
+        const candle = [...bData].reverse().find(c => new Date(c.t) <= txDate);
+        if (candle && candle.c > 0) {
+          const czk = toCZK(tx.quantity*tx.price+(tx.fee||0), tx.currency, rates);
+          // Convert CZK to benchmark currency (USD) using approximate rate
+          const usdCzk = rates.USD_CZK || 23.2;
+          const usdAmt = czk / usdCzk;
+          benchUnits += usdAmt / candle.c;
+          benchCost += czk;
+        }
+      });
+
+      if (benchUnits === 0) return null;
+
+      // Current benchmark value: benchUnits × current price
+      const latestCandle = bData[bData.length-1];
+      const currentBenchUSD = benchUnits * latestCandle.c;
+      const currentBenchCZK = currentBenchUSD * (rates.USD_CZK || 23.2);
+
+      // Build benchmark series: for each month, find benchmark price and compute value
       const startDate = points[0].date;
-      const endDate = points[points.length-1].date;
-      const filtered = bData.filter(c => new Date(c.t) >= startDate && new Date(c.t) <= endDate);
-      if (filtered.length < 2) return null;
-      const basePrice = filtered[0].c;
-      const portStart = points.find(p => p.current > 0)?.current || points[0].current || 1;
-      return { ...b, pts: filtered.map(c => ({
-        ratio: c.c / basePrice,
-        ts: new Date(c.t),
-      })), portStart, startDate, endDate };
+      const bPts = points.map(pt => {
+        const candle = [...bData].reverse().find(c => new Date(c.t) <= pt.date);
+        if (!candle) return null;
+        // Bench units bought up to this date
+        let units = 0;
+        buys.filter(tx => new Date(tx.date) <= pt.date).forEach(tx => {
+          const txDate = new Date(tx.date);
+          const c = [...bData].reverse().find(cc => new Date(cc.t) <= txDate);
+          if (c && c.c > 0) {
+            const czk = toCZK(tx.quantity*tx.price+(tx.fee||0), tx.currency, rates);
+            units += (czk / (rates.USD_CZK||23.2)) / c.c;
+          }
+        });
+        const val = units * candle.c * (rates.USD_CZK||23.2);
+        return { date: pt.date, val };
+      }).filter(Boolean);
+
+      return { ...b, pts: bPts, finalValue: currentBenchCZK, costBasis: benchCost };
     }).filter(Boolean);
 
-  // Max value including benchmarks
+  // Max value
   const maxVal = Math.max(
     ...points.map(v => Math.max(v.invested, v.current)),
-    ...benchmarkSeries.flatMap(b => b.pts.map(p => b.portStart * p.ratio)),
+    ...benchmarkSeries.flatMap(b => b.pts.map(p => p.val)),
     1
   );
 
-  const w = 580, h = 180, pad = {t:10, b:28, l:66, r:10};
-  const iW = w-pad.l-pad.r, iH = h-pad.t-pad.b;
+  const W = 580, H = 190, pad = {t:12, b:30, l:72, r:12};
+  const iW = W-pad.l-pad.r, iH = H-pad.t-pad.b;
   const xS = i => pad.l + (i/(points.length-1||1))*iW;
-  const yS = v => pad.t + iH - (v/maxVal)*iH;
-  const iPath = points.map((v,i)=>`${i===0?"M":"L"}${xS(i)},${yS(v.invested)}`).join(" ");
-  const cPath = points.map((v,i)=>`${i===0?"M":"L"}${xS(i)},${yS(v.current)}`).join(" ");
+  const yS = v => pad.t + iH - Math.min(1,(v/maxVal))*iH;
+  const iPath = points.map((v,i)=>`${i===0?"M":"L"}${xS(i).toFixed(1)},${yS(v.invested).toFixed(1)}`).join(" ");
+  const cPath = points.map((v,i)=>`${i===0?"M":"L"}${xS(i).toFixed(1)},${yS(v.current).toFixed(1)}`).join(" ");
   const aPath = cPath + ` L${xS(points.length-1)},${yS(0)} L${xS(0)},${yS(0)} Z`;
   const step = Math.max(1, Math.floor(points.length/8));
+  const fmtK = v => v >= 1e6 ? (v/1e6).toFixed(2)+" M" : v >= 1e3 ? (v/1e3).toFixed(0)+"k" : v.toFixed(0);
+  const fmtKč = v => v >= 1e6 ? (v/1e6).toFixed(2)+" M Kč" : v >= 1e3 ? (v/1e3).toFixed(0)+"k Kč" : v.toFixed(0)+" Kč";
 
-  const fmtK = v => v >= 1e6 ? (v/1e6).toFixed(1)+"M" : v >= 1e3 ? (v/1e3).toFixed(0)+"k" : v.toFixed(0);
+  // Gain/loss stats
+  const gainCZK = liveValue - lastPt.invested;
+  const gainPct = lastPt.invested > 0 ? (gainCZK/lastPt.invested*100) : 0;
+
+  const handleSvgMove = (e) => {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const idx = Math.max(0, Math.min(points.length-1, Math.round((mx - pad.l) / iW * (points.length-1))));
+    const pt = points[idx];
+    const bVals = benchmarkSeries.map(b => ({ label:b.label, color:b.color, val: b.pts[idx]?.val }));
+    setTooltip({ x: xS(idx), idx, pt, bVals });
+  };
 
   return (
-    <div style={{overflowX:"auto"}}>
-      <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",minWidth:300,height:"auto"}}>
-        <defs>
-          <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#6366f1" stopOpacity="0.25"/>
-            <stop offset="100%" stopColor="#6366f1" stopOpacity="0"/>
-          </linearGradient>
-        </defs>
-        {[0,0.25,0.5,0.75,1].map(t=>(
-          <g key={t}>
-            <line x1={pad.l} y1={pad.t+iH*t} x2={w-pad.r} y2={pad.t+iH*t} stroke="#1e293b" strokeWidth="1"/>
-            <text x={pad.l-4} y={pad.t+iH*t+4} textAnchor="end" fill="#8b9fc0" fontSize="8">{fmtK(maxVal*(1-t))}</text>
-          </g>
-        ))}
-        {points.map((v,i) => i%step===0 && (
-          <text key={i} x={xS(i)} y={h-4} textAnchor="middle" fill="#8b9fc0" fontSize="8">{v.label}</text>
-        ))}
-        <path d={aPath} fill="url(#ag)"/>
-        <path d={iPath} fill="none" stroke="#334155" strokeWidth="1.5" strokeDasharray="4,3"/>
-        <path d={cPath} fill="none" stroke="#6366f1" strokeWidth="2"/>
-        <circle cx={xS(points.length-1)} cy={yS(points[points.length-1].current)} r="3" fill="#6366f1"/>
-        {/* Benchmark lines */}
-        {benchmarkSeries.map(b => {
-          const startDate = b.startDate;
-          const endDate = b.endDate;
-          const totalMs = endDate - startDate || 1;
-          const bPath = b.pts.map((p,i) => {
-            const xPct = (p.ts - startDate) / totalMs;
-            const bx = pad.l + xPct * iW;
-            const by = yS(b.portStart * p.ratio);
-            return `${i===0?"M":"L"}${bx},${by}`;
-          }).join(" ");
-          return <path key={b.id} d={bPath} fill="none" stroke={b.color} strokeWidth="1.8" opacity={0.9} strokeDasharray="6,2"/>;
-        })}
-      </svg>
-      <div style={{display:"flex",gap:14,marginTop:6,fontSize:10,color:"#94a3b8",flexWrap:"wrap"}}>
-        <span><span style={{color:"#6366f1"}}>──</span> Portfolio</span>
-        <span><span style={{color:"#334155"}}>- -</span> Investováno</span>
+    <div>
+      {/* Stats row */}
+      <div style={{display:"flex",gap:16,marginBottom:10,flexWrap:"wrap"}}>
+        <div style={{fontSize:11,color:"#8b9fc0"}}>Investováno: <b style={{color:"#e2e8f0"}}>{fmtKč(lastPt.invested)}</b></div>
+        <div style={{fontSize:11,color:"#8b9fc0"}}>Hodnota: <b style={{color:"#6366f1"}}>{fmtKč(liveValue)}</b></div>
+        <div style={{fontSize:11,color:"#8b9fc0"}}>Zisk: <b style={{color:gainCZK>=0?"#10b981":"#f87171"}}>{gainCZK>=0?"+":""}{fmtKč(gainCZK)} ({gainPct>=0?"+":""}{gainPct.toFixed(1)}%)</b></div>
         {benchmarkSeries.map(b=>(
-          <span key={b.id}><span style={{color:b.color}}>- -</span> {b.label}</span>
+          <div key={b.id} style={{fontSize:11,color:"#8b9fc0"}}>{b.label}: <b style={{color:b.color}}>{fmtKč(b.finalValue)} ({b.costBasis>0?(((b.finalValue-b.costBasis)/b.costBasis*100)>=0?"+":"")+(((b.finalValue-b.costBasis)/b.costBasis*100)).toFixed(1)+"%":"–"})</b></div>
         ))}
+      </div>
+      <div style={{overflowX:"auto",position:"relative"}}>
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{width:"100%",minWidth:300,height:"auto",cursor:"crosshair"}}
+          onMouseMove={handleSvgMove} onMouseLeave={()=>setTooltip(null)}>
+          <defs>
+            <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#6366f1" stopOpacity="0.3"/>
+              <stop offset="100%" stopColor="#6366f1" stopOpacity="0.02"/>
+            </linearGradient>
+          </defs>
+          {[0,0.25,0.5,0.75,1].map(t=>(
+            <g key={t}>
+              <line x1={pad.l} y1={pad.t+iH*t} x2={W-pad.r} y2={pad.t+iH*t} stroke="#1e293b" strokeWidth="1"/>
+              <text x={pad.l-5} y={pad.t+iH*t+4} textAnchor="end" fill="#475569" fontSize="9">{fmtK(maxVal*(1-t))}</text>
+            </g>
+          ))}
+          {points.map((v,i) => i%step===0 && (
+            <text key={i} x={xS(i)} y={H-6} textAnchor="middle" fill="#475569" fontSize="9">{v.label}</text>
+          ))}
+          {/* Benchmark lines */}
+          {benchmarkSeries.map(b => {
+            const bPath = b.pts.map((p,i)=>`${i===0?"M":"L"}${xS(i).toFixed(1)},${yS(p.val).toFixed(1)}`).join(" ");
+            return <path key={b.id} d={bPath} fill="none" stroke={b.color} strokeWidth="1.8" opacity={0.85} strokeDasharray="5,3"/>;
+          })}
+          <path d={aPath} fill="url(#ag)"/>
+          <path d={iPath} fill="none" stroke="#334155" strokeWidth="1.5" strokeDasharray="4,3"/>
+          <path d={cPath} fill="none" stroke="#6366f1" strokeWidth="2.5"/>
+          <circle cx={xS(points.length-1)} cy={yS(points[points.length-1].current)} r="4" fill="#6366f1"/>
+          {/* Hover crosshair */}
+          {tooltip && (
+            <>
+              <line x1={tooltip.x} y1={pad.t} x2={tooltip.x} y2={H-pad.b} stroke="#ffffff" strokeWidth="1" strokeDasharray="2,3" opacity="0.25"/>
+              <circle cx={tooltip.x} cy={yS(tooltip.pt.current)} r="4" fill="#6366f1" stroke="#fff" strokeWidth="1.5"/>
+              {tooltip.bVals.map((b,i) => b.val && (
+                <circle key={i} cx={tooltip.x} cy={yS(b.val)} r="3.5" fill={b.color} stroke="#fff" strokeWidth="1.5"/>
+              ))}
+            </>
+          )}
+          {/* Axes */}
+          <line x1={pad.l} y1={pad.t} x2={pad.l} y2={H-pad.b} stroke="#334155" strokeWidth="1"/>
+          <line x1={pad.l} y1={H-pad.b} x2={W-pad.r} y2={H-pad.b} stroke="#334155" strokeWidth="1"/>
+        </svg>
+      </div>
+      {/* Tooltip */}
+      {tooltip && (
+        <div style={{marginTop:8,padding:"8px 12px",background:"#0f1a2e",border:"1px solid #1e3a5f",borderRadius:8,fontSize:11}}>
+          <b style={{color:"#e2e8f0"}}>{tooltip.pt.date.toLocaleDateString("cs-CZ",{month:"short",year:"numeric"})}</b>
+          <div style={{marginTop:4,display:"flex",gap:12,flexWrap:"wrap"}}>
+            <span style={{color:"#64748b"}}>Investováno: <b style={{color:"#94a3b8"}}>{fmtKč(tooltip.pt.invested)}</b></span>
+            <span style={{color:"#64748b"}}>Portfolio: <b style={{color:"#818cf8"}}>{fmtKč(tooltip.pt.current)}</b></span>
+            {tooltip.bVals.map((b,i) => b.val && (
+              <span key={i} style={{color:"#64748b"}}>{b.label}: <b style={{color:b.color}}>{fmtKč(b.val)}</b></span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{display:"flex",gap:14,marginTop:8,fontSize:10,color:"#64748b",flexWrap:"wrap"}}>
+        <span><span style={{color:"#6366f1",fontWeight:700}}>──</span> Portfolio (hodnota)</span>
+        <span><span style={{color:"#334155",fontWeight:700}}>╌╌</span> Investováno (cost basis)</span>
+        {benchmarkSeries.map(b=>(
+          <span key={b.id}><span style={{color:b.color,fontWeight:700}}>╌╌</span> {b.label} (stejné cash flow)</span>
+        ))}
+        <span style={{color:"#475569",fontStyle:"italic"}}>Benchmark = kolik byste měli kdybych místo akcií koupil index</span>
       </div>
     </div>
   );
@@ -333,43 +405,218 @@ const FIGauge = ({ pct }) => {
 
 // ─── FI PROJECTION CHART ──────────────────────────────────────────────────────
 const FIProjectionChart = ({ currentCZK, monthlySaving, annualReturn, targetCZK }) => {
-  const months = [];
-  const monthlyReturn = annualReturn / 100 / 12;
-  let balance = currentCZK;
-  let reached = false;
-  for (let m = 0; m <= 600 && !reached; m++) {
-    months.push({ m, balance });
-    if (balance >= targetCZK) reached = true;
-    balance = balance * (1 + monthlyReturn) + monthlySaving;
-  }
-  if (months.length < 2) return null;
-  const maxVal = Math.max(targetCZK * 1.1, months[months.length-1].balance);
-  const w = 560, h = 140, pad = { t: 8, b: 28, l: 62, r: 8 };
-  const iW = w - pad.l - pad.r, iH = h - pad.t - pad.b;
-  const xS = (i) => pad.l + (i / (months.length - 1)) * iW;
-  const yS = (v) => pad.t + iH - (v / maxVal) * iH;
-  const path = months.map((p, i) => `${i===0?"M":"L"}${xS(i)},${yS(p.balance)}`).join(" ");
+  const [tooltip, setTooltip] = useState(null);
+  const [hovX, setHovX] = useState(null);
+  const svgRef = useRef(null);
+
+  const now = new Date();
+  const buildSeries = (rate) => {
+    const pts = [];
+    const monthlyRate = rate / 100 / 12;
+    let bal = currentCZK;
+    for (let m = 0; m <= 480; m++) {
+      pts.push({ m, bal, year: now.getFullYear() + m/12 });
+      if (bal >= targetCZK * 1.5 && m > 12) break;
+      bal = bal * (1 + monthlyRate) + monthlySaving;
+    }
+    return pts;
+  };
+
+  const base = buildSeries(annualReturn);
+  const bull = buildSeries(annualReturn + 3);
+  const bear = buildSeries(Math.max(0, annualReturn - 3));
+
+  if (base.length < 2) return null;
+
+  // FI crossing points
+  const fiBase = base.find(p => p.bal >= targetCZK);
+  const fiBull = bull.find(p => p.bal >= targetCZK);
+  const fiBear = bear.find(p => p.bal >= targetCZK);
+
+  const fiDate = (months) => {
+    if (!months) return null;
+    const d = new Date(now.getFullYear(), now.getMonth() + months.m, 1);
+    return d.toLocaleDateString("cs-CZ", { month: "long", year: "numeric" });
+  };
+
+  const maxM = base[base.length-1].m;
+  const maxVal = Math.max(targetCZK * 1.15, base[base.length-1].bal, bull[bull.length-1].bal);
+
+  const W = 560, H = 220;
+  const pad = { t: 20, b: 36, l: 72, r: 16 };
+  const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
+
+  const xS = m => pad.l + (m / maxM) * iW;
+  const yS = v => pad.t + iH - Math.min(1, v / maxVal) * iH;
+
+  const makePath = (pts) => pts.map((p,i) => `${i===0?"M":"L"}${xS(p.m).toFixed(1)},${yS(p.bal).toFixed(1)}`).join(" ");
+  const makeArea = (pts, baseline) => {
+    const top = pts.map((p,i) => `${i===0?"M":"L"}${xS(p.m).toFixed(1)},${yS(p.bal).toFixed(1)}`).join(" ");
+    const bot = [...pts].reverse().map(p => `L${xS(p.m).toFixed(1)},${yS(baseline).toFixed(1)}`).join(" ");
+    return top + " " + bot + " Z";
+  };
+
+  // Grid
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(t => ({ v: maxVal * (1-t), y: pad.t + iH * t }));
+  const xTicks = [];
+  const step = Math.max(1, Math.floor(maxM / 8 / 12)) * 12;
+  for (let m = 0; m <= maxM; m += step) xTicks.push(m);
+
+  const fmtM = (v) => {
+    if (v >= 1e9) return (v/1e9).toFixed(2) + " mld";
+    if (v >= 1e6) return (v/1e6).toFixed(2) + " M";
+    if (v >= 1e3) return (v/1e3).toFixed(0) + " k";
+    return v.toFixed(0);
+  };
+
+  // Mouse hover handler
+  const handleMouseMove = (e) => {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const mRaw = ((mx - pad.l) / iW) * maxM;
+    const mIdx = Math.max(0, Math.min(base.length-1, Math.round(mRaw)));
+    const pt = base[mIdx];
+    const bullPt = bull[Math.min(mIdx, bull.length-1)];
+    const bearPt = bear[Math.min(mIdx, bear.length-1)];
+    if (mRaw < 0 || mRaw > maxM) { setTooltip(null); setHovX(null); return; }
+    const d = new Date(now.getFullYear(), now.getMonth() + pt.m, 1);
+    setHovX(xS(pt.m));
+    setTooltip({
+      x: xS(pt.m), y: yS(pt.bal),
+      date: d.toLocaleDateString("cs-CZ", { month: "short", year: "numeric" }),
+      years: (pt.m/12).toFixed(1),
+      base: pt.bal,
+      bull: bullPt.bal,
+      bear: bearPt.bal,
+    });
+  };
+
   const tY = yS(targetCZK);
-  const step = Math.max(1, Math.floor(months.length / 6));
+
   return (
-    <div style={{ overflowX: "auto" }}>
-      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", minWidth: 280, height: "auto" }}>
-        {[0,0.25,0.5,0.75,1].map(t => (
-          <g key={t}>
-            <line x1={pad.l} y1={pad.t+iH*t} x2={w-pad.r} y2={pad.t+iH*t} stroke="#1e293b" strokeWidth="1"/>
-            <text x={pad.l-4} y={pad.t+iH*t+4} textAnchor="end" fill="#8b9fc0" fontSize="8">{(maxVal*(1-t)/1000000).toFixed(1)}M</text>
-          </g>
+    <div>
+      {/* FI date badges */}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
+        {[
+          {label:"🐻 Bear ("+(annualReturn-3)+"%)", date:fiDate(fiBear), color:"#f87171", months:fiBear},
+          {label:"📈 Base ("+annualReturn+"%)", date:fiDate(fiBase), color:"#10b981", months:fiBase},
+          {label:"🐂 Bull ("+(annualReturn+3)+"%)", date:fiDate(fiBull), color:"#60a5fa", months:fiBull},
+        ].map((s,i) => (
+          <div key={i} style={{background:"#0a0f1e",border:`1px solid ${s.color}44`,borderRadius:10,padding:"8px 14px",flex:1,minWidth:140}}>
+            <div style={{fontSize:10,color:s.color,fontWeight:700,marginBottom:3}}>{s.label}</div>
+            <div style={{fontSize:13,fontWeight:800,color:s.color}}>{s.date || "∞"}</div>
+            {s.months && <div style={{fontSize:10,color:"#64748b",marginTop:2}}>za {(s.months.m/12).toFixed(1)} let</div>}
+          </div>
         ))}
-        {months.filter((_,i)=>i%step===0).map((p,i)=>(
-          <text key={i} x={xS(months.indexOf(months.filter((_,j)=>j%step===0)[i]))} y={h-4} textAnchor="middle" fill="#8b9fc0" fontSize="8">
-            {Math.floor(p.m/12)}r
-          </text>
+      </div>
+
+      <div style={{overflowX:"auto"}}>
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{width:"100%",minWidth:320,height:"auto",cursor:"crosshair"}}
+          onMouseMove={handleMouseMove} onMouseLeave={()=>{setTooltip(null);setHovX(null);}}>
+
+          <defs>
+            <linearGradient id="fiGradBase" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.25"/>
+              <stop offset="100%" stopColor="#10b981" stopOpacity="0.02"/>
+            </linearGradient>
+            <linearGradient id="fiGradBull" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#60a5fa" stopOpacity="0.15"/>
+              <stop offset="100%" stopColor="#60a5fa" stopOpacity="0.02"/>
+            </linearGradient>
+            <linearGradient id="fiGradBear" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#f87171" stopOpacity="0.1"/>
+              <stop offset="100%" stopColor="#f87171" stopOpacity="0.02"/>
+            </linearGradient>
+          </defs>
+
+          {/* Grid */}
+          {yTicks.map((tk,i) => (
+            <g key={i}>
+              <line x1={pad.l} y1={tk.y} x2={W-pad.r} y2={tk.y} stroke="#1e293b" strokeWidth={i===0?0:1}/>
+              <text x={pad.l-6} y={tk.y+4} textAnchor="end" fill="#475569" fontSize="9">{fmtM(tk.v)} Kč</text>
+            </g>
+          ))}
+          {xTicks.map((m,i) => {
+            const yr = Math.floor(m/12);
+            const d = new Date(now.getFullYear()+yr, now.getMonth(), 1);
+            return (
+              <g key={i}>
+                <line x1={xS(m)} y1={pad.t} x2={xS(m)} y2={H-pad.b} stroke="#1e293b" strokeWidth="1" strokeDasharray="2,4"/>
+                <text x={xS(m)} y={H-pad.b+14} textAnchor="middle" fill="#475569" fontSize="9">{d.getFullYear()}</text>
+              </g>
+            );
+          })}
+
+          {/* Today vertical line */}
+          <line x1={xS(0)} y1={pad.t} x2={xS(0)} y2={H-pad.b} stroke="#6366f1" strokeWidth="1.5" strokeDasharray="3,3"/>
+          <text x={xS(0)+3} y={pad.t+10} fill="#6366f1" fontSize="8">Dnes</text>
+
+          {/* FI target line */}
+          {targetCZK > 0 && (
+            <>
+              <line x1={pad.l} y1={tY} x2={W-pad.r} y2={tY} stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="6,3"/>
+              <text x={W-pad.r-2} y={tY-4} textAnchor="end" fill="#f59e0b" fontSize="9" fontWeight="700">FI cíl: {fmtM(targetCZK)} Kč</text>
+            </>
+          )}
+
+          {/* Bear area + line */}
+          <path d={makeArea(bear, maxVal)} fill="url(#fiGradBear)" opacity="0.7"/>
+          <path d={makePath(bear)} fill="none" stroke="#f87171" strokeWidth="1.5" strokeDasharray="5,3" opacity="0.7"/>
+
+          {/* Bull area + line */}
+          <path d={makeArea(bull, maxVal)} fill="url(#fiGradBull)" opacity="0.6"/>
+          <path d={makePath(bull)} fill="none" stroke="#60a5fa" strokeWidth="1.5" strokeDasharray="5,3" opacity="0.7"/>
+
+          {/* Base area + line */}
+          <path d={makeArea(base, maxVal)} fill="url(#fiGradBase)"/>
+          <path d={makePath(base)} fill="none" stroke="#10b981" strokeWidth="2.5"/>
+
+          {/* FI crossing markers */}
+          {fiBull && <circle cx={xS(fiBull.m)} cy={tY} r="5" fill="#60a5fa" opacity="0.9"/>}
+          {fiBase && <circle cx={xS(fiBase.m)} cy={tY} r="6" fill="#10b981"/>}
+          {fiBear && <circle cx={xS(fiBear.m)} cy={tY} r="5" fill="#f87171" opacity="0.9"/>}
+
+          {/* Current portfolio dot */}
+          <circle cx={xS(0)} cy={yS(currentCZK)} r="5" fill="#6366f1"/>
+          <text x={xS(0)+7} y={yS(currentCZK)+4} fill="#818cf8" fontSize="9">{fmtM(currentCZK)} Kč</text>
+
+          {/* Hover crosshair */}
+          {hovX && (
+            <line x1={hovX} y1={pad.t} x2={hovX} y2={H-pad.b} stroke="#ffffff" strokeWidth="1" strokeDasharray="2,3" opacity="0.3"/>
+          )}
+          {tooltip && (
+            <circle cx={tooltip.x} cy={tooltip.y} r="4" fill="#10b981" stroke="#fff" strokeWidth="1.5"/>
+          )}
+
+          {/* Axes */}
+          <line x1={pad.l} y1={pad.t} x2={pad.l} y2={H-pad.b} stroke="#334155" strokeWidth="1"/>
+          <line x1={pad.l} y1={H-pad.b} x2={W-pad.r} y2={H-pad.b} stroke="#334155" strokeWidth="1"/>
+        </svg>
+      </div>
+
+      {/* Tooltip box */}
+      {tooltip && (
+        <div style={{marginTop:8,padding:"10px 14px",background:"#0f1a2e",border:"1px solid #1e3a5f",borderRadius:10,fontSize:11}}>
+          <div style={{fontWeight:700,color:"#e2e8f0",marginBottom:6}}>📅 {tooltip.date} <span style={{color:"#64748b",fontWeight:400}}>({tooltip.years} let od teď)</span></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            <div><div style={{color:"#f87171",fontSize:10}}>🐻 Bear</div><div style={{fontWeight:700,color:"#f87171"}}>{fmtM(tooltip.bear)} Kč</div></div>
+            <div><div style={{color:"#10b981",fontSize:10}}>📈 Base</div><div style={{fontWeight:700,color:"#10b981"}}>{fmtM(tooltip.base)} Kč</div></div>
+            <div><div style={{color:"#60a5fa",fontSize:10}}>🐂 Bull</div><div style={{fontWeight:700,color:"#60a5fa"}}>{fmtM(tooltip.bull)} Kč</div></div>
+          </div>
+          {tooltip.base >= targetCZK && targetCZK > 0 && (
+            <div style={{marginTop:6,color:"#10b981",fontWeight:700,fontSize:11}}>✅ FI cíl dosažen!</div>
+          )}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div style={{display:"flex",gap:14,marginTop:10,fontSize:10,color:"#64748b",flexWrap:"wrap"}}>
+        {[["#10b981","Base výnos ("+annualReturn+"%)","─"],["#60a5fa","Optimistický (+"+"3%)","╌"],["#f87171","Konzervativní (-3%)","╌"],["#f59e0b","FI cíl","╌"],["#6366f1","Aktuální stav","●"]].map(([c,l,s],i)=>(
+          <span key={i}><span style={{color:c,fontWeight:700,marginRight:3}}>{s}</span>{l}</span>
         ))}
-        <line x1={pad.l} y1={tY} x2={w-pad.r} y2={tY} stroke="#f59e0b" strokeWidth="1" strokeDasharray="4,3" />
-        <text x={w-pad.r-2} y={tY-3} textAnchor="end" fill="#f59e0b" fontSize="8">FI cíl</text>
-        <path d={path} fill="none" stroke="#10b981" strokeWidth="2" />
-        <circle cx={xS(months.length-1)} cy={yS(months[months.length-1].balance)} r="3" fill="#10b981"/>
-      </svg>
+      </div>
     </div>
   );
 };
@@ -1128,6 +1375,300 @@ function CsvImportModal({ onClose, onImport, S }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+
+// ─── TIPY TAB ────────────────────────────────────────────────────────────────
+function TipyTab({ S, lang, rates, darkMode, textPrimary, textMuted, textSec, border }) {
+  const [tips, setTips] = useState(null);
+  const [loadingTips, setLoadingTips] = useState(false);
+  const [selectedTip, setSelectedTip] = useState(null);
+  const [report, setReport] = useState(null);
+  const [loadingReport, setLoadingReport] = useState(false);
+  const [sector, setSector] = useState("all");
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const SECTORS = [
+    ["all","Vše"],["tech","Technologie"],["finance","Finance"],["health","Zdravotnictví"],
+    ["energy","Energie"],["consumer","Spotřební zboží"],["industrial","Průmysl"],["reit","REIT"],
+  ];
+
+  const callClaude = async (prompt, maxTokens) => {
+    const resp = await fetch("/api/claude", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:maxTokens,
+        messages:[{role:"user", content:prompt}] })
+    });
+    const json = await resp.json();
+    const text = json.content?.[0]?.text || "";
+    return JSON.parse(text.replace(/```json|```/g,"").trim());
+  };
+
+  const fetchTips = async () => {
+    setLoadingTips(true); setErrorMsg(""); setTips(null); setSelectedTip(null); setReport(null);
+    try {
+      const sLabel = SECTORS.find(s=>s[0]===sector)?.[1]||"všechny sektory";
+      const prompt = `Vyber 8 akcií${sector!=="all"?" ze sektoru "+sLabel:""} kde je AKTUÁLNÍ TRŽNÍ CENA (k ${new Date().toLocaleDateString("cs-CZ")}) NIŽŠÍ než jejich fundamentální fair value (DCF/Graham). Zásadní podmínka: fairValue musí být vyšší než skutečná aktuální cena — vyber skutečně podhodnocené příležitosti s alespoň 15% margin of safety. Uveď realistické fairValue odvozené z DCF, P/E normalizace nebo Graham čísla. Odpověz POUZE validním JSON bez markdown:
+{"updated":"dnes","tips":[{"ticker":"X","name":"Název","sector":"S","currency":"USD","currentPrice":0,"fairValue":150,"upside":25,"rating":"Silný nákup","thesis":"Teze.","risks":"Rizika.","pe":18,"peVsAvg":"pod avg","analystBuy":30,"analystHold":8,"analystSell":2,"analystTarget":155,"revenueGrowth":8,"epsGrowth":10,"roe":20,"debtToEquity":0.5,"dividendYield":1,"catalysts":["Kat1","Kat2"]}]}`;
+      const data = await callClaude(prompt, 6000);
+      // Fetch real prices and overwrite AI-generated prices
+      try {
+        const tickers = (data.tips||[]).map(t=>t.ticker).filter(Boolean);
+        if (tickers.length) {
+          const pr = await fetch("/api/prices", {
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({tickers})
+          });
+          if (pr.ok) {
+            const prData = await pr.json();
+            if (prData.prices) {
+              data.tips = (data.tips||[]).map(t => {
+                const live = prData.prices[t.ticker];
+                if (live?.price) {
+                  const realPrice = live.price;
+                  const upside = t.fairValue ? ((t.fairValue - realPrice) / realPrice * 100) : t.upside;
+                  const upsideNum = parseFloat(upside.toFixed(1));
+                  // Recalculate rating based on real upside
+                  const rating = upsideNum >= 30 ? "Silný nákup"
+                    : upsideNum >= 15 ? "Nákup"
+                    : upsideNum >= 0  ? "Držet"
+                    : upsideNum >= -15 ? "Podvážit"
+                    : "Prodat";
+                  return {...t, currentPrice: realPrice, upside: upsideNum, rating};
+                }
+                return t;
+              });
+              // Keep only genuinely undervalued: real price < fair value (upside > 0)
+              data.tips = data.tips.filter(t => t.upside > 0);
+              // Sort by upside descending
+              data.tips.sort((a,b) => b.upside - a.upside);
+            }
+          }
+        }
+      } catch(e) { /* live prices optional, ignore errors */ }
+      setTips(data);
+    } catch(e) { setErrorMsg("Chyba: "+e.message); }
+    setLoadingTips(false);
+  };
+
+  const fetchReport = async (tip) => {
+    setLoadingReport(true); setReport(null); setSelectedTip(tip);
+    try {
+      const prompt = `Dnešní datum: ${new Date().toLocaleDateString("cs-CZ")}. Vytvoř kompletní investiční analýzu pro ${tip.ticker} (${tip.name}). Vrať POUZE čistý JSON:
+{"ticker":"${tip.ticker}","name":"${tip.name}","date":"${new Date().toLocaleDateString("cs-CZ")}","companyOverview":"3-4 věty o firmě.","investmentThesis":"4-5 vět proč koupit.","valuation":{"currentPrice":${tip.currentPrice},"currency":"${tip.currency}","dcfBase":220.0,"dcfBull":260.0,"dcfBear":170.0,"dcfAssumptions":"Předpoklady DCF.","grahamValue":180.0,"grahamFormula":"Graham formula.","buffettValue":210.0,"buffettMethod":"Owner earnings.","peRatio":28.5,"peVsHistorical":"pod hist. průměrem","pbRatio":45.0,"psRatio":7.2,"evEbitda":22.0,"evEbitdaVsSector":"pod sektorem","peg":1.8,"fairValueRange":"200-250 USD","marginOfSafety":18.0},"fundamentals":{"years5y":["2020","2021","2022","2023","2024"],"revenue5y":[274,366,394,383,391],"netIncome5y":[57,95,100,97,101],"fcf5y":[73,93,111,99,108],"eps5y":[3.3,5.6,6.1,6.1,6.4],"revenueGrowthCagr":9.3,"grossMargin":44.5,"operatingMargin":31.5,"netMargin":25.3,"roe":147.0,"roa":28.3,"roic":55.0,"currentRatio":0.9,"quickRatio":0.8,"debtToEquity":1.8,"interestCoverage":42.0,"altmanZ":4.2},"technical":{"trend":"Uptrend","support":175.0,"resistance":200.0,"rsi":52.0,"rsiComment":"Neutrální zóna.","ma50":182.0,"ma200":175.0,"goldenCross":true,"technicalRating":"Bullish","technicalComment":"Silný trend nad MA200."},"earnings":[{"quarter":"Q1 2025","eps":1.65,"epsEstimate":1.61,"beat":true,"revenue":95.4,"revenueEstimate":94.2,"comment":"Silné iPhone prodeje."},{"quarter":"Q4 2024","eps":2.40,"epsEstimate":2.35,"beat":true,"revenue":124.3,"revenueEstimate":123.1,"comment":"Rekordní tržby."},{"quarter":"Q3 2024","eps":1.40,"epsEstimate":1.35,"beat":true,"revenue":85.8,"revenueEstimate":84.5,"comment":"Růst services."},{"quarter":"Q2 2024","eps":1.53,"epsEstimate":1.50,"beat":true,"revenue":90.8,"revenueEstimate":89.5,"comment":"Solidní výsledky."}],"analysts":{"avgTarget":225.0,"highTarget":275.0,"lowTarget":165.0,"buy":35,"hold":10,"sell":2,"consensus":"Strong Buy","recentUpgrades":["Goldman Sachs: Upgrade Buy, cíl $250","Morgan Stanley: Zvýšení cíle na $240"]},"catalysts":["Apple Intelligence AI","Nový iPhone cyklus","Růst Services","Zpětné odkupy akcií"],"risks":["Regulace v EU","Konkurence v Číně","Saturace trhu smartphonů"],"prediction":{"target12m":225.0,"target24m":250.0,"target36m":280.0,"bull12m":260.0,"base12m":225.0,"bear12m":170.0,"comment":"Výhled pozitivní díky AI a services."},"balanceSheet":{"totalAssets":365.0,"totalLiabilities":308.0,"equity":57.0,"cash":65.0,"totalDebt":104.0,"netDebt":39.0,"comment":"Silná cash pozice, zvládnutelný dluh."},"conclusion":"Závěrečné doporučení 3-4 věty."}`;
+      const data = await callClaude(prompt, 4000);
+      setReport(data);
+    } catch(e) { setErrorMsg("Chyba reportu: "+e.message); }
+    setLoadingReport(false);
+  };
+
+  const downloadReport = (r) => {
+    const f2=(n,d=1)=>n!=null&&!isNaN(n)?Number(n).toFixed(d):"–";
+    const fP=(n)=>n!=null&&!isNaN(n)?Number(n).toFixed(1)+"%":"–";
+    const cur=r.valuation?.currency||"USD";
+    const html=`<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>${r.ticker} — Analýza</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;background:#0d1117;color:#e2e8f0;padding:32px;max-width:900px;margin:auto}h1{font-size:26px;font-weight:800;color:#fff;margin-bottom:4px}.sub{color:#64748b;font-size:12px;margin-bottom:24px}h2{font-size:14px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.1em;margin:24px 0 10px;padding-bottom:5px;border-bottom:1px solid #1e293b}p{font-size:13px;line-height:1.7;color:#cbd5e1;margin-bottom:8px}.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}.card{background:#111827;border:1px solid #1e293b;border-radius:8px;padding:12px}.lbl{font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:3px}.val{font-size:16px;font-weight:700;color:#f1f5f9}.vsm{font-size:13px;font-weight:600;color:#f1f5f9}.gr{color:#10b981}.rd{color:#f87171}.yw{color:#f59e0b}.bl{color:#60a5fa}.pu{color:#a78bfa}table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;padding:7px 10px;color:#64748b;font-size:9px;text-transform:uppercase;border-bottom:1px solid #1e293b}td{padding:7px 10px;border-bottom:1px solid #0f1a2e;color:#cbd5e1}ul{padding-left:16px;margin:6px 0}li{font-size:13px;color:#cbd5e1;margin-bottom:3px}.footer{margin-top:32px;padding-top:12px;border-top:1px solid #1e293b;font-size:10px;color:#475569;text-align:center}</style></head><body>
+<h1>${r.ticker} — ${r.name}</h1><div class="sub">Investiční analýza · ${r.date} · InvestTrack AI</div>
+<h2>O společnosti</h2><p>${r.companyOverview}</p>
+<h2>Investiční teze</h2><p>${r.investmentThesis}</p>
+<h2>Ocenění</h2>
+<div class="g4"><div class="card"><div class="lbl">Cena</div><div class="val">${f2(r.valuation?.currentPrice)} ${cur}</div></div><div class="card"><div class="lbl">DCF Base</div><div class="val gr">${f2(r.valuation?.dcfBase)} ${cur}</div></div><div class="card"><div class="lbl">Graham</div><div class="val bl">${f2(r.valuation?.grahamValue)} ${cur}</div></div><div class="card"><div class="lbl">Buffett</div><div class="val pu">${f2(r.valuation?.buffettValue)} ${cur}</div></div></div>
+<div class="g4"><div class="card"><div class="lbl">P/E</div><div class="vsm">${f2(r.valuation?.peRatio)}x</div></div><div class="card"><div class="lbl">EV/EBITDA</div><div class="vsm">${f2(r.valuation?.evEbitda)}x</div></div><div class="card"><div class="lbl">Fair Value</div><div class="vsm gr">${r.valuation?.fairValueRange||"–"}</div></div><div class="card"><div class="lbl">Margin of Safety</div><div class="vsm gr">${fP(r.valuation?.marginOfSafety)}</div></div></div>
+<h2>Fundamenty (5 let)</h2>
+<table><thead><tr><th>Rok</th>${(r.fundamentals?.years5y||[]).map(y=>"<th>"+y+"</th>").join("")}</tr></thead><tbody>
+<tr><td>Tržby (mld)</td>${(r.fundamentals?.revenue5y||[]).map(v=>"<td>"+f2(v)+"</td>").join("")}</tr>
+<tr><td>Čistý zisk (mld)</td>${(r.fundamentals?.netIncome5y||[]).map(v=>"<td class='"+(v>=0?"gr":"rd")+"'>"+f2(v)+"</td>").join("")}</tr>
+<tr><td>FCF (mld)</td>${(r.fundamentals?.fcf5y||[]).map(v=>"<td class='"+(v>=0?"gr":"rd")+"'>"+f2(v)+"</td>").join("")}</tr>
+<tr><td>EPS</td>${(r.fundamentals?.eps5y||[]).map(v=>"<td>"+f2(v)+"</td>").join("")}</tr>
+</tbody></table>
+<div class="g4" style="margin-top:10px"><div class="card"><div class="lbl">Hrubá marže</div><div class="vsm">${fP(r.fundamentals?.grossMargin)}</div></div><div class="card"><div class="lbl">Provozní marže</div><div class="vsm">${fP(r.fundamentals?.operatingMargin)}</div></div><div class="card"><div class="lbl">ROE/ROA/ROIC</div><div class="vsm">${fP(r.fundamentals?.roe)} / ${fP(r.fundamentals?.roa)} / ${fP(r.fundamentals?.roic)}</div></div><div class="card"><div class="lbl">Debt/Equity</div><div class="vsm">${f2(r.fundamentals?.debtToEquity)}</div></div></div>
+<h2>Technická analýza</h2>
+<div class="g4"><div class="card"><div class="lbl">Trend</div><div class="vsm ${r.technical?.trend==="Uptrend"?"gr":r.technical?.trend==="Downtrend"?"rd":"yw"}">${r.technical?.trend||"–"}</div></div><div class="card"><div class="lbl">RSI</div><div class="vsm ${(r.technical?.rsi||50)<30?"gr":(r.technical?.rsi||50)>70?"rd":"yw"}">${f2(r.technical?.rsi,0)}</div></div><div class="card"><div class="lbl">MA50/MA200</div><div class="vsm">${f2(r.technical?.ma50)} / ${f2(r.technical?.ma200)}</div></div><div class="card"><div class="lbl">Golden Cross</div><div class="vsm ${r.technical?.goldenCross?"gr":"rd"}">${r.technical?.goldenCross?"✓ Ano":"✗ Ne"}</div></div></div>
+<p>${r.technical?.technicalComment||""}</p>
+<h2>Poslední výsledky (Earnings)</h2>
+<table><thead><tr><th>Čtvrtletí</th><th>EPS</th><th>Odhad</th><th>Beat?</th><th>Tržby</th><th>Komentář</th></tr></thead><tbody>
+${(r.earnings||[]).map(e=>"<tr><td>"+e.quarter+"</td><td>"+f2(e.eps)+"</td><td>"+f2(e.epsEstimate)+"</td><td style='color:"+(e.beat?"#10b981":"#f87171")+"'>"+(e.beat?"✓ Beat":"✗ Miss")+"</td><td>"+f2(e.revenue)+"</td><td style='font-size:11px'>"+e.comment+"</td></tr>").join("")}
+</tbody></table>
+<h2>Analytici</h2>
+<div class="g4"><div class="card"><div class="lbl">Konsensus</div><div class="vsm gr">${r.analysts?.consensus||"–"}</div></div><div class="card"><div class="lbl">Avg Target</div><div class="vsm">${f2(r.analysts?.avgTarget)} ${cur}</div></div><div class="card"><div class="lbl">High/Low</div><div class="vsm">${f2(r.analysts?.highTarget)} / ${f2(r.analysts?.lowTarget)}</div></div><div class="card"><div class="lbl">Buy/Hold/Sell</div><div class="vsm"><span class="gr">${r.analysts?.buy||0}</span>/<span class="yw">${r.analysts?.hold||0}</span>/<span class="rd">${r.analysts?.sell||0}</span></div></div></div>
+${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.recentUpgrades.map(u=>"<li>"+u+"</li>").join(""))+"</ul>":""}
+<h2>Katalyzátory &amp; Rizika</h2>
+<div class="g2"><div><h2 style="color:#10b981;border-color:#064e3b">Katalyzátory</h2><ul>${(r.catalysts||[]).map(c=>"<li>"+c+"</li>").join("")}</ul></div><div><h2 style="color:#f87171;border-color:#450a0a">Rizika</h2><ul>${(r.risks||[]).map(c=>"<li>"+c+"</li>").join("")}</ul></div></div>
+<h2>Predikce</h2>
+<div class="g3"><div class="card"><div class="lbl">12 měsíců</div><div class="val gr">${f2(r.prediction?.base12m)} ${cur}</div><div style="font-size:10px;color:#64748b;margin-top:3px">🐂${f2(r.prediction?.bull12m)} · 🐻${f2(r.prediction?.bear12m)}</div></div><div class="card"><div class="lbl">24 měsíců</div><div class="val gr">${f2(r.prediction?.target24m)} ${cur}</div></div><div class="card"><div class="lbl">36 měsíců</div><div class="val gr">${f2(r.prediction?.target36m)} ${cur}</div></div></div>
+<p>${r.prediction?.comment||""}</p>
+<h2>Závěr</h2><div class="card" style="border-color:#4f46e5"><p style="font-size:14px;line-height:1.8">${r.conclusion}</p></div>
+<div class="footer">InvestTrack AI · ${r.date} · Pouze pro informační účely, není investičním doporučením.</div>
+</body></html>`;
+    const blob=new Blob([html],{type:"text/html"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download="analyza-"+r.ticker+"-"+new Date().toISOString().slice(0,10)+".html";
+    a.click();
+  };
+
+  const upc=(p)=>p>=20?"#10b981":p>=10?"#22d3a0":p>=0?"#f59e0b":"#f87171";
+  const rbg=(r)=>r==="Silný nákup"?"#064e3b":r==="Nákup"?"#052e16":r==="Držet"?"#451a03":"#450a0a";
+  const rfg=(r)=>r==="Silný nákup"?"#10b981":r==="Nákup"?"#34d399":r==="Držet"?"#f59e0b":"#f87171";
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18,flexWrap:"wrap",gap:10}}>
+        <div>
+          <div style={{fontSize:18,fontWeight:800,color:textPrimary}}>💡 Tipy na podhodnocené akcie</div>
+          <div style={{fontSize:12,color:textMuted,marginTop:2}}>AI analýza · Vyberte sektor a nechte vygenerovat tipy</div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <select value={sector} onChange={e=>setSector(e.target.value)} style={S.select}>
+            {SECTORS.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+          </select>
+          <button style={{...S.btn("primary"),padding:"9px 20px",fontWeight:700}} onClick={fetchTips} disabled={loadingTips}>
+            {loadingTips?"⏳ Analyzuji...":"🔍 Najít tipy"}
+          </button>
+        </div>
+      </div>
+
+      {errorMsg&&<div style={{color:"#f87171",fontSize:12,marginBottom:12,padding:"8px 12px",background:"#450a0a",borderRadius:8}}>{errorMsg}</div>}
+
+      {!tips&&!loadingTips&&(
+        <div style={{...S.card,textAlign:"center",padding:48}}>
+          <div style={{fontSize:40,marginBottom:12}}>🔍</div>
+          <div style={{fontSize:15,fontWeight:700,color:textPrimary,marginBottom:8}}>Najít podhodnocené akcie</div>
+          <div style={{fontSize:12,color:textMuted,maxWidth:400,margin:"0 auto"}}>
+            Vyberte sektor a klikněte na "Najít tipy". AI vybere 8 akcií s potenciálem růstu, silnými fundamenty a margin of safety.
+          </div>
+        </div>
+      )}
+
+      {loadingTips&&(
+        <div style={{...S.card,textAlign:"center",padding:48}}>
+          <div style={{fontSize:32,marginBottom:12}}>⏳</div>
+          <div style={{color:textMuted,fontSize:13}}>AI analyzuje trh a hledá podhodnocené akcie...</div>
+        </div>
+      )}
+
+      {tips&&!loadingTips&&(
+        <>
+          <div style={{fontSize:11,color:textMuted,marginBottom:14}}>
+            Aktualizováno: {tips.updated} · {tips.tips?.length} tipů s cenou pod fair value
+            {tips.tips?.length === 0 && <span style={{color:"#f87171",marginLeft:8}}>— žádná akcie nesplňuje kritéria, zkuste jiný sektor</span>}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:14,marginBottom:24}}>
+            {(tips.tips||[]).map((tip,i)=>(
+              <div key={i} style={{...S.card,border:`1px solid ${selectedTip?.ticker===tip.ticker?"#6366f1":border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                  <div>
+                    <div style={{fontSize:16,fontWeight:800,color:textPrimary}}>{tip.ticker}</div>
+                    <div style={{fontSize:11,color:textMuted}}>{tip.name} · {tip.sector}</div>
+                  </div>
+                  <span style={{background:rbg(tip.rating),color:rfg(tip.rating),padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>{tip.rating}</span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                  {[["Cena",tip.currentPrice+" "+tip.currency,"#f1f5f9"],["Fair Value",tip.fairValue+" "+tip.currency,"#10b981"],["Upside","+"+Number(tip.upside||0).toFixed(1)+"%",upc(tip.upside||0)]].map(([l,v,c],j)=>(
+                    <div key={j} style={{background:darkMode?"#0a0f1e":"#f1f5f9",borderRadius:8,padding:"8px 10px"}}>
+                      <div style={{fontSize:9,color:textMuted,textTransform:"uppercase"}}>{l}</div>
+                      <div style={{fontSize:13,fontWeight:700,color:c}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{fontSize:12,color:textSec,lineHeight:1.6,marginBottom:8}}>{tip.thesis}</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+                  {(tip.catalysts||[]).slice(0,3).map((c,j)=>(
+                    <span key={j} style={{background:darkMode?"#1e2d45":"#dbeafe",color:darkMode?"#60a5fa":"#1d4ed8",padding:"2px 8px",borderRadius:12,fontSize:10}}>{c}</span>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center",justifyContent:"space-between",paddingTop:8,borderTop:`1px solid ${border}`}}>
+                  <div style={{fontSize:10,color:textMuted}}>P/E {Number(tip.pe||0).toFixed(1)} · {tip.analystBuy}× Buy · Target {tip.analystTarget} {tip.currency}</div>
+                  <button style={{...S.btn("primary"),padding:"5px 12px",fontSize:11}} onClick={()=>fetchReport(tip)}>
+                    📄 Analýza
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {loadingReport&&(
+            <div style={{...S.card,textAlign:"center",padding:36}}>
+              <div style={{color:textMuted,fontSize:13}}>⏳ Generuji detailní analýzu pro {selectedTip?.ticker}...</div>
+            </div>
+          )}
+
+          {report&&!loadingReport&&(
+            <div style={S.card}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:8}}>
+                <div>
+                  <div style={{fontSize:17,fontWeight:800,color:textPrimary}}>📄 {report.ticker} — {report.name}</div>
+                  <div style={{fontSize:11,color:textMuted}}>Detailní investiční analýza · {report.date}</div>
+                </div>
+                <button style={{...S.btn("primary"),padding:"8px 18px",fontWeight:700}} onClick={()=>downloadReport(report)}>
+                  ⬇ Stáhnout HTML
+                </button>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:14}}>
+                {[
+                  {l:"Aktuální cena",v:`${report.valuation?.currentPrice} ${report.valuation?.currency||"USD"}`,c:"#f1f5f9"},
+                  {l:"DCF (base)",v:`${report.valuation?.dcfBase} ${report.valuation?.currency||"USD"}`,c:"#10b981"},
+                  {l:"Graham",v:`${report.valuation?.grahamValue} ${report.valuation?.currency||"USD"}`,c:"#60a5fa"},
+                  {l:"Buffett",v:`${report.valuation?.buffettValue} ${report.valuation?.currency||"USD"}`,c:"#a78bfa"},
+                  {l:"Margin of Safety",v:`${Number(report.valuation?.marginOfSafety||0).toFixed(1)}%`,c:"#22d3a0"},
+                  {l:"Analyst Target",v:`${report.analysts?.avgTarget} ${report.valuation?.currency||"USD"}`,c:"#f59e0b"},
+                ].map((s,i)=>(
+                  <div key={i} style={{background:darkMode?"#0a0f1e":"#f1f5f9",borderRadius:10,padding:"10px 12px"}}>
+                    <div style={{fontSize:9,color:textMuted,textTransform:"uppercase",marginBottom:3}}>{s.l}</div>
+                    <div style={{fontSize:14,fontWeight:700,color:s.c}}>{s.v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:darkMode?"#0a0f1e":"#f0f9ff",border:"1px solid #4f46e5",borderRadius:10,padding:14,marginBottom:14}}>
+                <div style={{fontSize:11,color:"#818cf8",fontWeight:700,marginBottom:6}}>✅ ZÁVĚR</div>
+                <div style={{fontSize:13,color:textPrimary,lineHeight:1.7}}>{report.conclusion}</div>
+              </div>
+              <div style={{marginBottom:14}}>
+                <div style={S.sectionTitle}>📣 Poslední výsledky</div>
+                <table style={S.table}><thead><tr>
+                  {["Čtvrtletí","EPS","Odhad","Beat?","Tržby (mld)","Komentář"].map(h=><th key={h} style={S.th}>{h}</th>)}
+                </tr></thead><tbody>
+                  {(report.earnings||[]).map((e,i)=>(
+                    <tr key={i}>
+                      <td style={S.td}>{e.quarter}</td>
+                      <td style={S.td}>{Number(e.eps||0).toFixed(2)}</td>
+                      <td style={{...S.td,color:textMuted}}>{Number(e.epsEstimate||0).toFixed(2)}</td>
+                      <td style={{...S.td,color:e.beat?"#10b981":"#f87171",fontWeight:700}}>{e.beat?"✓ Beat":"✗ Miss"}</td>
+                      <td style={S.td}>{Number(e.revenue||0).toFixed(2)}</td>
+                      <td style={{...S.td,fontSize:11,color:textMuted}}>{e.comment}</td>
+                    </tr>
+                  ))}
+                </tbody></table>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
+                {[
+                  {l:"12m cíl",v:report.prediction?.base12m,bull:report.prediction?.bull12m,bear:report.prediction?.bear12m,cur:report.valuation?.currency},
+                  {l:"24m cíl",v:report.prediction?.target24m,cur:report.valuation?.currency},
+                  {l:"36m cíl",v:report.prediction?.target36m,cur:report.valuation?.currency},
+                ].map((p,i)=>(
+                  <div key={i} style={{background:darkMode?"#0a0f1e":"#f1f5f9",borderRadius:10,padding:"10px 12px"}}>
+                    <div style={{fontSize:10,color:textMuted,marginBottom:4}}>{p.l}</div>
+                    <div style={{fontSize:16,fontWeight:700,color:"#10b981"}}>{p.v} {p.cur}</div>
+                    {p.bull&&<div style={{fontSize:10,color:textMuted,marginTop:2}}>🐂{p.bull} · 🐻{p.bear}</div>}
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div>
+                  <div style={{...S.sectionTitle,color:"#10b981"}}>🚀 Katalyzátory</div>
+                  {(report.catalysts||[]).map((c,i)=>(<div key={i} style={{display:"flex",gap:8,marginBottom:5}}><span style={{color:"#10b981",fontWeight:700}}>↑</span><span style={{fontSize:12,color:textSec}}>{c}</span></div>))}
+                </div>
+                <div>
+                  <div style={{...S.sectionTitle,color:"#f87171"}}>⚠ Rizika</div>
+                  {(report.risks||[]).map((r2,i)=>(<div key={i} style={{display:"flex",gap:8,marginBottom:5}}><span style={{color:"#f87171",fontWeight:700}}>!</span><span style={{fontSize:12,color:textSec}}>{r2}</span></div>))}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -2876,6 +3417,298 @@ const DrawdownChart = ({ transactions, prices, rates, portfolioCurrentCZK=0 }) =
 };
 
 
+
+// ─── DIGRIN-STYLE DIVIDEND TABLE CALENDAR ────────────────────────────────────
+function DigrinCalendar({ transactions, rates, tickerNames, S, textMuted, textPrimary, textSec, border, bgCard, darkMode, lang }) {
+  const [showGross, setShowGross] = useState(true);
+
+  const now = new Date();
+  // 6 měsíců zpět, aktuální, 6 dopředu = 13 měsíců
+  const months = [];
+  for (let i = -6; i <= 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    months.push({ year: d.getFullYear(), month: d.getMonth(), label: d.toLocaleString(lang==="en"?"en-US":"cs-CZ", { month: "short", year: "2-digit" }) });
+  }
+
+  const divTx = transactions.filter(t => t.type === "dividend");
+  const allTickers = [...new Set(divTx.map(t => t.ticker))].sort();
+
+  // Helper: get CZK amount (net)
+  const getNet = (t) => (t.dividendCZK||(t.currency||"USD")==="CZK") ? (t.dividendAmount||0) : toCZK(t.dividendAmount||0, t.currency||"USD", rates);
+  // Helper: gross = net / (1 - tax%)
+  const getGross = (t) => { const net = getNet(t); const tax = (parseFloat(t.divTax)||15)/100; return tax > 0 && tax < 1 ? net/(1-tax) : net; };
+  const getAmt = (t) => showGross ? getGross(t) : getNet(t);
+
+  // Build lookup: ticker → month-key → {amount, status}
+  // status: "paid" = historical tx, "upcoming" = future estimated
+  const lookup = {}; // ticker → "YYYY-M" → {amount, status}
+  const monthTotals = {}; // "YYYY-M" → amount
+
+  divTx.forEach(t => {
+    const d = new Date(t.date);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!lookup[t.ticker]) lookup[t.ticker] = {};
+    lookup[t.ticker][key] = (lookup[t.ticker][key] || 0) + getAmt(t);
+    monthTotals[key] = (monthTotals[key] || 0) + getAmt(t);
+  });
+
+  // Predict future months: find last payment per ticker, estimate next periods
+  const predicted = {}; // ticker → "YYYY-M" → amount (estimated)
+  allTickers.forEach(ticker => {
+    const txs = divTx.filter(t => t.ticker === ticker).sort((a,b) => new Date(a.date)-new Date(b.date));
+    if (!txs.length) return;
+
+    // Detect payment frequency: gaps between payments in months
+    const gaps = [];
+    for (let i = 1; i < txs.length; i++) {
+      const a = new Date(txs[i-1].date), b = new Date(txs[i].date);
+      const g = (b.getFullYear()-a.getFullYear())*12 + b.getMonth()-a.getMonth();
+      if (g > 0) gaps.push(g);
+    }
+    const freq = gaps.length ? Math.round(gaps.reduce((s,g)=>s+g,0)/gaps.length) : 3; // default quarterly
+    const clampedFreq = Math.max(1, Math.min(12, freq));
+
+    // Average amount (last 4 payments)
+    const last4 = txs.slice(-4);
+    const avgAmt = last4.reduce((s,t) => s+getAmt(t), 0) / last4.length;
+
+    // Last payment date
+    const lastTx = txs[txs.length-1];
+    const lastDate = new Date(lastTx.date);
+    let nextDate = new Date(lastDate.getFullYear(), lastDate.getMonth() + clampedFreq, 1);
+
+    // Project future payments within our 6-month window
+    const futureLimit = new Date(now.getFullYear(), now.getMonth() + 7, 1);
+    while (nextDate < futureLimit) {
+      const key = `${nextDate.getFullYear()}-${nextDate.getMonth()}`;
+      if (!lookup[ticker]?.[key]) { // don't overwrite real data
+        if (!predicted[ticker]) predicted[ticker] = {};
+        predicted[ticker][key] = avgAmt;
+        if (!monthTotals[key]) monthTotals[key] = 0;
+        // don't add to monthTotals — shown separately
+      }
+      nextDate = new Date(nextDate.getFullYear(), nextDate.getMonth() + clampedFreq, 1);
+    }
+  });
+
+  const grandTotal = Object.values(monthTotals).reduce((s,v)=>s+v,0);
+  const predictedTotal = allTickers.reduce((s, tk) => s + Object.values(predicted[tk]||{}).reduce((ss,v)=>ss+v,0), 0);
+
+  const fmtAmt = (v, currency) => {
+    if (!v) return null;
+    if (currency === "CZK" || !currency) return `Kč${Math.round(v).toLocaleString("cs-CZ")}`;
+    return `${currency}${Number(v).toFixed(2)}`;
+  };
+  const fmtCZK = (v) => v ? `${Math.round(v).toLocaleString("cs-CZ")} Kč` : null;
+
+  // Is month in the past, current, or future?
+  const monthStatus = (year, month) => {
+    const nm = now.getFullYear()*12 + now.getMonth();
+    const mm = year*12 + month;
+    if (mm < nm) return "past";
+    if (mm === nm) return "current";
+    return "future";
+  };
+
+  const COL_W = 72;
+  const TICKER_W = 72;
+
+  const cellBg = (status, hasPaid, hasPred) => {
+    if (hasPaid) return darkMode ? "#064e3b" : "#d1fae5";   // green = paid
+    if (hasPred) {
+      if (status === "future") return darkMode ? "#1e1a4e" : "#ede9fe"; // purple = estimated
+      return darkMode ? "#1a2a4e" : "#dbeafe"; // blue = upcoming (near future)
+    }
+    return "transparent";
+  };
+  const cellColor = (hasPaid, hasPred, status) => {
+    if (hasPaid) return "#10b981";
+    if (hasPred) return status === "future" ? "#8b5cf6" : "#3b82f6";
+    return textMuted;
+  };
+
+  return (
+    <div style={S.card}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={S.sectionTitle}>Dividend Calendar</div>
+          <div style={{fontSize:11,color:textMuted,marginTop:2}}>
+            <span style={{color:"#10b981",fontWeight:700}}>■</span> Vyplaceno &nbsp;
+            <span style={{color:"#3b82f6",fontWeight:700}}>■</span> Nadcházející &nbsp;
+            <span style={{color:"#8b5cf6",fontWeight:700}}>■</span> Odhad
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          <button onClick={()=>setShowGross(true)}
+            style={{fontSize:11,padding:"4px 12px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:showGross?700:400,
+              background:showGross?"#10b98133":"transparent",color:showGross?"#10b981":textMuted,border:`1px solid ${showGross?"#10b981":border}`}}>
+            Gross
+          </button>
+          <button onClick={()=>setShowGross(false)}
+            style={{fontSize:11,padding:"4px 12px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:!showGross?700:400,
+              background:!showGross?"#6366f133":"transparent",color:!showGross?"#818cf8":textMuted,border:`1px solid ${!showGross?"#6366f1":border}`}}>
+            Net
+          </button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{overflowX:"auto"}}>
+        <table style={{borderCollapse:"collapse",fontSize:11,minWidth:TICKER_W + months.length*COL_W}}>
+          <thead>
+            <tr>
+              {/* Empty corner */}
+              <th style={{padding:"6px 8px",textAlign:"left",color:textMuted,fontSize:10,borderBottom:`2px solid ${border}`,minWidth:TICKER_W,position:"sticky",left:0,background:darkMode?"#161d30":"#eef2f9",zIndex:2}}></th>
+              {/* Total column */}
+              <th style={{padding:"6px 8px",textAlign:"right",color:textMuted,fontSize:10,borderBottom:`2px solid ${border}`,minWidth:64,background:darkMode?"#161d30":"#eef2f9",fontWeight:700}}>Total</th>
+              {/* Month columns */}
+              {months.map(({year,month,label},i) => {
+                const st = monthStatus(year,month);
+                return (
+                  <th key={i} style={{padding:"6px 8px",textAlign:"center",fontSize:10,fontWeight:st==="current"?800:600,
+                    color:st==="current"?"#6366f1":st==="past"?textMuted:textSec,
+                    borderBottom:`2px solid ${st==="current"?"#6366f1":border}`,
+                    minWidth:COL_W,
+                    background:st==="current"?(darkMode?"#1a1a4e":"#ede9fe"):"transparent"}}>
+                    {label}
+                  </th>
+                );
+              })}
+            </tr>
+            {/* Total row */}
+            <tr style={{background:darkMode?"#0d1220":"#f1f5f9"}}>
+              <td style={{padding:"5px 8px",fontWeight:700,color:textPrimary,fontSize:11,position:"sticky",left:0,background:darkMode?"#0d1220":"#f1f5f9",zIndex:2}}>Total:</td>
+              <td style={{padding:"5px 8px",textAlign:"right",fontWeight:700,color:"#10b981",fontSize:11}}>{Math.round(grandTotal+predictedTotal).toLocaleString("cs-CZ")} Kč</td>
+              {months.map(({year,month},i) => {
+                const key = `${year}-${month}`;
+                const paid = monthTotals[key]||0;
+                const pred = allTickers.reduce((s,tk)=>s+(predicted[tk]?.[key]||0),0);
+                const total = paid + pred;
+                const st = monthStatus(year,month);
+                return (
+                  <td key={i} style={{padding:"5px 8px",textAlign:"center",fontWeight:600,fontSize:11,
+                    color:paid>0?"#10b981":pred>0?"#3b82f6":textMuted,
+                    borderLeft:`1px solid ${border}`}}>
+                    {total>0 ? Math.round(total).toLocaleString("cs-CZ") : "–"}
+                  </td>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {allTickers.map((ticker, ti) => {
+              // Per-ticker total
+              const tickerTotal = divTx.filter(t=>t.ticker===ticker).reduce((s,t)=>s+getAmt(t),0)
+                + Object.values(predicted[ticker]||{}).reduce((s,v)=>s+v,0);
+              const currency = divTx.find(t=>t.ticker===ticker)?.currency||"USD";
+              return (
+                <tr key={ticker} style={{borderBottom:`1px solid ${border}`,background:ti%2===0?"transparent":(darkMode?"#0a0f1e22":"#f8fafc")}}>
+                  {/* Ticker */}
+                  <td style={{padding:"5px 8px",fontWeight:700,color:"#6366f1",fontSize:11,position:"sticky",left:0,background:ti%2===0?(darkMode?"#161d30":"#eef2f9"):(darkMode?"#0f1626":"#f1f5f9"),zIndex:1}}>
+                    <div style={{color:"#6366f1"}}>{ticker}</div>
+                    <div style={{fontSize:9,color:textMuted,fontWeight:400}}>{(tickerNames[ticker]||ticker).slice(0,14)}</div>
+                  </td>
+                  {/* Ticker total */}
+                  <td style={{padding:"5px 8px",textAlign:"right",fontSize:11,fontWeight:600,color:textPrimary}}>
+                    {Math.round(tickerTotal).toLocaleString("cs-CZ")} Kč
+                  </td>
+                  {/* Per-month cells */}
+                  {months.map(({year,month},i) => {
+                    const key = `${year}-${month}`;
+                    const paidAmt = lookup[ticker]?.[key];
+                    const predAmt = predicted[ticker]?.[key];
+                    const st = monthStatus(year,month);
+                    const hasPaid = !!paidAmt;
+                    const hasPred = !!predAmt;
+                    const displayAmt = paidAmt || predAmt;
+                    const isCZK = currency==="CZK";
+                    return (
+                      <td key={i} style={{padding:"4px 6px",textAlign:"center",fontSize:10,
+                        background:cellBg(st,hasPaid,hasPred),
+                        color:cellColor(hasPaid,hasPred,st),
+                        fontWeight:hasPaid||hasPred?600:400,
+                        borderLeft:`1px solid ${border}`,
+                        borderRadius:4}}>
+                        {displayAmt
+                          ? (isCZK
+                              ? `Kč${Math.round(displayAmt).toLocaleString("cs-CZ")}`
+                              : `${Math.round(displayAmt).toLocaleString("cs-CZ")} Kč`)
+                          : <span style={{color:border}}>–</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+          {/* Bottom total row */}
+          <tfoot>
+            <tr style={{background:darkMode?"#0d1220":"#f1f5f9",borderTop:`2px solid ${border}`}}>
+              <td style={{padding:"5px 8px",fontWeight:700,color:textPrimary,fontSize:11,position:"sticky",left:0,background:darkMode?"#0d1220":"#f1f5f9",zIndex:2}}>Total:</td>
+              <td style={{padding:"5px 8px",textAlign:"right",fontWeight:700,color:"#10b981",fontSize:11}}>{Math.round(grandTotal+predictedTotal).toLocaleString("cs-CZ")} Kč</td>
+              {months.map(({year,month},i) => {
+                const key = `${year}-${month}`;
+                const paid = monthTotals[key]||0;
+                const pred = allTickers.reduce((s,tk)=>s+(predicted[tk]?.[key]||0),0);
+                const total = paid+pred;
+                return (
+                  <td key={i} style={{padding:"5px 8px",textAlign:"center",fontWeight:700,fontSize:11,
+                    color:paid>0?"#10b981":pred>0?"#3b82f6":textMuted,borderLeft:`1px solid ${border}`}}>
+                    {total>0?Math.round(total).toLocaleString("cs-CZ"):"–"}
+                  </td>
+                );
+              })}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {/* Upcoming section */}
+      {(() => {
+        const upcoming = [];
+        allTickers.forEach(ticker => {
+          const txs = divTx.filter(t=>t.ticker===ticker).sort((a,b)=>new Date(a.date)-new Date(b.date));
+          if (!txs.length) return;
+          // Find next predicted payment
+          Object.entries(predicted[ticker]||{}).forEach(([key,amt]) => {
+            const [y,m] = key.split("-").map(Number);
+            const d = new Date(y,m,15); // mid-month estimate
+            if (d >= now) upcoming.push({ticker, name:tickerNames[ticker]||ticker, date:d, amount:amt, currency:txs[0]?.currency||"USD"});
+          });
+        });
+        upcoming.sort((a,b)=>a.date-b.date);
+        if (!upcoming.length) return null;
+        return (
+          <div style={{marginTop:16}}>
+            <div style={{fontSize:12,fontWeight:700,color:textPrimary,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.08em"}}>Upcoming Dividends</div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+              <thead><tr>
+                {["Ex-dividend date","Stock","Amount (est.)"].map(h=>(
+                  <th key={h} style={{textAlign:"left",padding:"6px 10px",color:textMuted,fontSize:10,textTransform:"uppercase",borderBottom:`1px solid ${border}`}}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {upcoming.slice(0,8).map((u,i)=>(
+                  <tr key={i} style={{borderBottom:`1px solid ${border}`}}>
+                    <td style={{padding:"6px 10px",color:textSec}}>{u.date.toLocaleDateString("cs-CZ")}</td>
+                    <td style={{padding:"6px 10px"}}>
+                      <span style={{fontWeight:700,color:"#6366f1"}}>{u.ticker}</span>
+                      <span style={{color:textMuted,marginLeft:6}}>{u.name.slice(0,30)}</span>
+                    </td>
+                    <td style={{padding:"6px 10px",fontWeight:600,color:"#3b82f6"}}>~{Math.round(u.amount).toLocaleString("cs-CZ")} Kč</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+
 // ─── DIGRIN-STYLE DIVIDEND CHART ─────────────────────────────────────────────
 function DigrínDividendChart({ transactions, rates, tickerNames, S, textMuted, textPrimary, border, bgCard, accent, lang }) {
   const [mode, setMode] = useState("quarterly"); // quarterly | yearly | monthly | bystock
@@ -2888,7 +3721,7 @@ function DigrínDividendChart({ transactions, rates, tickerNames, S, textMuted, 
   const DCOLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#3b82f6","#22d3a0","#f97316","#a78bfa","#f43f5e","#84cc16"];
   const allTickers = [...new Set(divTx.map(t => t.ticker))];
 
-  const getAmt = (t) => toCZK(t.dividendAmount||0, t.currency||"CZK", rates);
+  const getAmt = (t) => ((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates));
 
   // Build period → ticker → amount
   const buildData = () => {
@@ -3173,8 +4006,7 @@ export default function App() {
   const [ratesStatus, setRatesStatus] = useState("idle"); // idle | loading | ok | error
 
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | ok | error | offline
-  const [theme, setTheme] = useState("dark"); // dark | light | artofit | purple | ocean
-  const darkMode = theme === "dark" || theme === "purple" || theme === "ocean"; // backward compat
+  const [darkMode, setDarkMode] = useState(true);
   const [fontSize, setFontSize] = useState(13); // 11-17
   const [lang, setLang] = useState("cs"); // cs | en
 
@@ -3193,7 +4025,7 @@ export default function App() {
         const di = localStorage.getItem(`${lsKey}_dividends`);
         const ea = localStorage.getItem(`${lsKey}_earnings`);
         const fi = localStorage.getItem(`${lsKey}_fi`);
-        if (tx) setTransactions(JSON.parse(tx));
+        if (tx) setTransactions(JSON.parse(tx).map(t=>t.type==="dividend"&&t.dividendAmount&&!t.dividendCZK?{...t,dividendCZK:true}:t));
         if (po) setPortfolios(JSON.parse(po));
         if (ap) setActivePortfolioId(JSON.parse(ap));
         if (di) setDividends(JSON.parse(di));
@@ -3202,12 +4034,7 @@ export default function App() {
         const dm = localStorage.getItem("inv_darkMode");
         const fs = localStorage.getItem("inv_fontSize");
         const lg = localStorage.getItem("inv_lang");
-        if (dm !== null) {
-          // migrate old boolean darkMode to new theme string
-          if (dm === "true") setTheme("dark");
-          else if (dm === "false") setTheme("light");
-          else setTheme(dm.replace(/"/g,""));
-        }
+        if (dm !== null) setDarkMode(JSON.parse(dm));
         if (fs !== null) setFontSize(JSON.parse(fs));
         if (lg) setLang(lg);
       } catch {}
@@ -3234,7 +4061,7 @@ export default function App() {
             ticker: t.ticker, name: t.name, category: t.category,
             date: t.date, quantity: t.quantity, price: t.price,
             currency: t.currency, fee: t.fee,
-            dividendAmount: t.dividend_amount, amount: t.amount, notes: t.notes
+            dividendAmount: t.dividend_amount, dividendCZK: t.type==="dividend" && !!t.dividend_amount, amount: t.amount, notes: t.notes
           }));
           setTransactions(txs);
           localStorage.setItem(`${lsKey}_tx`, JSON.stringify(txs));
@@ -3341,7 +4168,7 @@ export default function App() {
   useEffect(() => { if (loaded) saveShared("prices", prices); }, [prices, loaded]);
 
   // Persist theme/fontSize locally (not synced to cloud)
-  useEffect(() => { try { localStorage.setItem("inv_darkMode", JSON.stringify(theme)); } catch {} }, [theme]);
+  useEffect(() => { try { localStorage.setItem("inv_darkMode", JSON.stringify(darkMode)); } catch {} }, [darkMode]);
   useEffect(() => { try { localStorage.setItem("inv_fontSize", JSON.stringify(fontSize)); } catch {} }, [fontSize]);
   useEffect(() => { try { localStorage.setItem("inv_lang", lang); } catch {} }, [lang]);
 
@@ -3558,7 +4385,7 @@ export default function App() {
         }
       } else if (t.type === "dividend" && t.dividendAmount) {
         // dividendAmount is already in CZK (converted at entry time)
-        totalDividendsCZK += t.dividendAmountCZK || (t.currency==="CZK" ? t.dividendAmount||0 : toCZK(t.dividendAmount||0, t.currency||"USD", rates));
+        totalDividendsCZK += ((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates));
       } else if (t.type === "deposit") {
         // Deposits don't count as investment cost - they're cash inflows
       } else if (t.type === "withdraw") {
@@ -3588,7 +4415,7 @@ export default function App() {
 
       // Yield on Cost (YoC) — total dividends received / original cost
       const tickerDivs = transactions.filter(t => t.type === "dividend" && t.ticker === h.ticker);
-      const totalDivReceivedCZK = tickerDivs.reduce((s,t) => s + toCZK(t.dividendAmount||0, t.currency, rates), 0);
+      const totalDivReceivedCZK = tickerDivs.reduce((s,t) => s + ((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)), 0);
       const yoc = h.totalCostCZK > 0 ? (totalDivReceivedCZK / h.totalCostCZK) * 100 : 0;
 
       // Dividend Growth Rate (DGR3) — compare last 3 years of dividends
@@ -3601,7 +4428,7 @@ export default function App() {
       // Current div yield (annual div / current price) — estimate from last 4 divs
       const lastDivs = tickerDivs.slice(-4);
       const annualDivPerShare = lastDivs.length > 0 && h.totalQty > 0
-        ? lastDivs.reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0) / h.totalQty * (4 / lastDivs.length) : 0;
+        ? lastDivs.reduce((s,t)=>s+((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),0) / h.totalQty * (4 / lastDivs.length) : 0;
       const divYield = currentPrice > 0 && annualDivPerShare > 0 ? (annualDivPerShare / currentPrice) * 100 : 0;
 
       // Break-even price
@@ -3702,68 +4529,28 @@ export default function App() {
 
   // ─── STYLES ────────────────────────────────────────────────────────────
   // Neumorphism color palette
-  // ─── THEME PALETTES ──────────────────────────────────────────────────────
-  const THEMES = {
-    dark: {
-      bg:"#13192b", bgCard:"#161d30", textPrimary:"#e8f0fe", textSec:"#8b9fc0",
-      textMuted:"#64748b", accent:"#6c63ff", border:"rgba(255,255,255,0.05)",
-      nmShadow:"6px 6px 14px #0b1020, -4px -4px 10px #1e2a45",
-      nmInset:"inset 3px 3px 8px #0b1020, inset -3px -3px 8px #1e2a45",
-      nmBtn:"4px 4px 10px #0b1020, -3px -3px 8px #1e2a45",
-      navBg:"#161d30", upColor:(v)=>v>=0?"#22d3a0":"#f87171",
-    },
-    light: {
-      bg:"#e8edf5", bgCard:"#eef2f9", textPrimary:"#1a2540", textSec:"#4a5a7a",
-      textMuted:"#8899bb", accent:"#6c63ff", border:"rgba(0,0,0,0.08)",
-      nmShadow:"6px 6px 14px #c5cad6, -4px -4px 10px #ffffff",
-      nmInset:"inset 3px 3px 8px #c5cad6, inset -3px -3px 8px #ffffff",
-      nmBtn:"4px 4px 10px #c5cad6, -3px -3px 8px #ffffff",
-      navBg:"#eef2f9", upColor:(v)=>v>=0?"#059669":"#dc2626",
-    },
-    artofit: {
-      // Clean light dashboard — white cards, green accents, Artofit style
-      bg:"#f0f4f8", bgCard:"#ffffff", textPrimary:"#0f172a", textSec:"#334155",
-      textMuted:"#64748b", accent:"#10b981", border:"rgba(0,0,0,0.06)",
-      nmShadow:"0 2px 12px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.05)",
-      nmInset:"inset 0 1px 3px rgba(0,0,0,0.06)",
-      nmBtn:"0 2px 8px rgba(16,185,129,0.2)",
-      navBg:"#ffffff", upColor:(v)=>v>=0?"#059669":"#dc2626",
-    },
-    purple: {
-      // Purple/Midnight — deep purple, violet accents
-      bg:"#0d0717", bgCard:"#160d24", textPrimary:"#f0e6ff", textSec:"#b09ac8",
-      textMuted:"#6b5580", accent:"#a855f7", border:"rgba(168,85,247,0.12)",
-      nmShadow:"6px 6px 16px #08030f, -4px -4px 12px #1e1030",
-      nmInset:"inset 3px 3px 8px #08030f, inset -3px -3px 8px #1e1030",
-      nmBtn:"4px 4px 10px #08030f, -3px -3px 8px #1e1030",
-      navBg:"#130920", upColor:(v)=>v>=0?"#34d399":"#f87171",
-    },
-    ocean: {
-      // Ocean — deep teal/navy, cyan accents
-      bg:"#071520", bgCard:"#0a1e2e", textPrimary:"#e0f4ff", textSec:"#7ab8d4",
-      textMuted:"#3d6880", accent:"#06b6d4", border:"rgba(6,182,212,0.1)",
-      nmShadow:"6px 6px 16px #030d15, -4px -4px 12px #112233",
-      nmInset:"inset 3px 3px 8px #030d15, inset -3px -3px 8px #112233",
-      nmBtn:"4px 4px 10px #030d15, -3px -3px 8px #112233",
-      navBg:"#081825", upColor:(v)=>v>=0?"#22d3a0":"#f87171",
-    },
-  };
-  const T_NOW = THEMES[theme] || THEMES.dark;
-  const bg          = T_NOW.bg;
-  const bgCard      = T_NOW.bgCard;
-  const textPrimary = T_NOW.textPrimary;
-  const textSec     = T_NOW.textSec;
-  const textMuted   = T_NOW.textMuted;
-  const accent      = T_NOW.accent;
-  const border      = T_NOW.border;
-  const nmShadow    = T_NOW.nmShadow;
-  const nmInset     = T_NOW.nmInset;
-  const nmBtn       = T_NOW.nmBtn;
+  const bg     = darkMode ? "#13192b" : "#e8edf5";
+  const bgCard = darkMode ? "#161d30" : "#eef2f9";
+  const textPrimary = darkMode ? "#e8f0fe" : "#1a2540";
+  const textSec = darkMode ? "#8b9fc0" : "#4a5a7a";
+  const textMuted = darkMode ? "#3d5080" : "#8899bb";
+  const accent = "#6c63ff";
+  const border = darkMode ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.08)";
+  // Neumorphism shadows
+  const nmShadow = darkMode
+    ? "6px 6px 14px #0b1020, -4px -4px 10px #1e2a45"
+    : "6px 6px 14px #c5cad6, -4px -4px 10px #ffffff";
+  const nmInset = darkMode
+    ? "inset 3px 3px 8px #0b1020, inset -3px -3px 8px #1e2a45"
+    : "inset 3px 3px 8px #c5cad6, inset -3px -3px 8px #ffffff";
+  const nmBtn = darkMode
+    ? "4px 4px 10px #0b1020, -3px -3px 8px #1e2a45"
+    : "4px 4px 10px #c5cad6, -3px -3px 8px #ffffff";
 
   const S = {
     app: { minHeight:"100vh", background:bg, color:textPrimary,
       fontFamily:"'IBM Plex Mono','Courier New',monospace", fontSize },
-    nav: { background:T_NOW.navBg||bgCard, boxShadow: darkMode ? "0 2px 20px #0b1020" : "0 2px 20px rgba(0,0,0,0.06)",
+    nav: { background:bgCard, boxShadow: darkMode ? "0 2px 20px #0b1020" : "0 2px 20px rgba(0,0,0,0.1)",
       position:"sticky", top:0, zIndex:100 },
     navTop: { padding:"0 20px", display:"flex", alignItems:"center", justifyContent:"space-between",
       borderBottom: `1px solid ${border}` },
@@ -3815,8 +4602,8 @@ export default function App() {
   const catColor = { stock:"#6366f1", etf:"#10b981", crypto:"#f59e0b", cash:"#22d3a0", real_estate:"#f97316" };
   const catLabel = { stock:t.stocks, etf:t.etf, crypto:t.crypto, cash:lang==="en"?"Cash":"Hotovost", real_estate:lang==="en"?"Real Estate":"Nemovitosti" };
 
-  const TABS = ["dashboard","portfolio","transakce","cashflow","dividendy","novinky","analyza","fi","dane","report","nastaveni"];
-  const TAB_LABELS = { dashboard:t.dashboard, portfolio:t.portfolio, transakce:t.transakce, cashflow:t.cashflow, dividendy:t.dividendy, novinky:t.novinky, analyza:t.analyza, fi:t.fi, dane:"🧾 Daně ČR", report:"📄 Report", nastaveni:t.nastaveni };
+  const TABS = ["dashboard","portfolio","transakce","cashflow","dividendy","novinky","analyza","tipy","fi","dane","report","nastaveni"];
+  const TAB_LABELS = { dashboard:t.dashboard, portfolio:t.portfolio, transakce:t.transakce, cashflow:t.cashflow, dividendy:t.dividendy, novinky:t.novinky, analyza:t.analyza, tipy:"💡 Tipy", fi:t.fi, dane:"🧾 Daně ČR", report:"📄 Report", nastaveni:t.nastaveni };
   const filtered = filterCat === "all" ? portfolio.positions : portfolio.positions.filter(p => p.category === filterCat);
 
   // ─── MOBILE DETECTION ────────────────────────────────────────────────────
@@ -3855,25 +4642,13 @@ export default function App() {
         * { font-family: 'IBM Plex Mono', 'Courier New', monospace; box-sizing: border-box; }
         #root > div { zoom: ${fontScale.toFixed(3)}; }
         body { background: ${bg}; margin: 0; }
-        ${theme === "artofit" ? `
-          .inv-card { box-shadow: 0 2px 16px rgba(0,0,0,0.07) !important; }
-          nav { border-bottom: 2px solid #10b981 !important; }
-        ` : ""}
-        ${theme === "purple" ? `
-          ::-webkit-scrollbar-thumb { background: #6d28d9; }
-          nav { border-bottom: 1px solid rgba(168,85,247,0.3) !important; }
-        ` : ""}
-        ${theme === "ocean" ? `
-          ::-webkit-scrollbar-thumb { background: #0e7490; }
-          nav { border-bottom: 1px solid rgba(6,182,212,0.25) !important; }
-        ` : ""}
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: ${bg}; }
-        ::-webkit-scrollbar-thumb { background: ${theme==="artofit"?"#c0cce0":darkMode?"#2d3f5a":"#b0bdd0"}; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb { background: ${darkMode?"#2d3f5a":"#b0bdd0"}; border-radius: 3px; }
         input:focus, select:focus { outline: 2px solid #6c63ff44 !important; border-color: #6c63ff !important; }
         button:hover { opacity: 0.88; transform: translateY(-1px); }
         button:active { transform: translateY(0); opacity: 1; }
-        tr:hover td { background: ${accent}08; }
+        tr:hover td { background: ${darkMode?"rgba(108,99,255,0.05)":"rgba(108,99,255,0.03)"}; }
       `}</style>
       <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
@@ -3928,11 +4703,11 @@ export default function App() {
             {pricesStatus === "error" && <span style={{ fontSize:10, color:"#ef4444" }}>⚠ ceny</span>}
             {ratesStatus === "error" && <span style={{ fontSize:10, color:"#ef4444" }}>kurzy offline</span>}
             {!isMobile && (
-              <span style={{ fontSize:10, fontWeight:700, color: textSec,
-                background: `${border}`,
+              <span style={{ fontSize:10, fontWeight:700, color: darkMode?"#8ba8d0":"#4a6080",
+                background: darkMode?"#1e2d45":"#d8e4f4",
                 padding:"3px 10px", borderRadius:8 }}>
-                USD <b style={{color: textPrimary}}>{rates.USD_CZK}</b>
-                &nbsp;·&nbsp;EUR <b style={{color: textPrimary}}>{rates.EUR_CZK}</b>
+                USD <b style={{color: darkMode?"#c8d8f0":"#1a2540"}}>{rates.USD_CZK}</b>
+                &nbsp;·&nbsp;EUR <b style={{color: darkMode?"#c8d8f0":"#1a2540"}}>{rates.EUR_CZK}</b>
               </span>
             )}
             <span style={{ fontSize:10, fontWeight:700, padding:"3px 10px", borderRadius:8,
@@ -3957,25 +4732,11 @@ export default function App() {
               title={lang==="cs" ? "Switch to English" : "Přepnout do češtiny"}>
               {lang==="cs" ? "🇬🇧" : "🇨🇿"}
             </button>
-            {/* Theme picker */}
-            <div style={{display:"flex",gap:3,alignItems:"center"}}>
-              {[
-                {id:"dark",    icon:"🌑", title:"Dark"},
-                {id:"light",   icon:"☀️",  title:"Light"},
-                {id:"artofit", icon:"🌿", title:"Artofit"},
-                {id:"purple",  icon:"💜", title:"Purple"},
-                {id:"ocean",   icon:"🌊", title:"Ocean"},
-              ].map(th=>(
-                <button key={th.id} title={th.title}
-                  onClick={()=>setTheme(th.id)}
-                  style={{background:theme===th.id?accent+"33":"transparent",
-                    border:`1px solid ${theme===th.id?accent:border}`,
-                    borderRadius:6,padding:"4px 7px",cursor:"pointer",
-                    fontSize:12,lineHeight:1,transition:"all 0.15s"}}>
-                  {th.icon}
-                </button>
-              ))}
-            </div>
+            {/* Dark/light toggle */}
+            <button style={{ ...S.btn("outline"), padding:"5px 10px", fontSize:14 }}
+              onClick={() => setDarkMode(d => !d)} title={darkMode ? "Světlý režim" : "Tmavý režim"}>
+              {darkMode ? "☀" : "🌙"}
+            </button>
             <button style={{ ...S.btn("primary"), padding:"6px 14px" }} onClick={() => setShowAddTx(true)}>+ Transakce</button>
           </div>
         </div>
@@ -4053,8 +4814,11 @@ export default function App() {
                     const val = p.currentValueCZK > 0 ? p.currentValueCZK : p.totalCostCZK;
                     cats[p.category]=(cats[p.category]||0)+val;
                   });
-                  // Add free cash (deposits - withdrawals - invested)
-                  const cashBalance = (portfolio.totalDeposits||0) - (portfolio.totalWithdrawals||0) - portfolio.totalInvestedCZK;
+                  // Cash = deposits - withdrawals - invested
+                  const totalDeposits = activeTransactions.filter(t=>t.type==="deposit").reduce((s,t)=>s+toCZK(t.amount||0,t.currency,rates),0);
+                  const totalWithdrawals = activeTransactions.filter(t=>t.type==="withdraw").reduce((s,t)=>s+toCZK(t.amount||0,t.currency,rates),0);
+                  const totalInvested = Object.values(cats).reduce((s,v)=>s+v,0);
+                  const cashBalance = Math.max(0, totalDeposits - totalWithdrawals - totalInvested);
                   if (cashBalance > 0) cats["cash"] = (cats["cash"]||0) + cashBalance;
                   const total = Object.values(cats).reduce((s,v)=>s+v,0)||1;
                   const entries = Object.entries(cats).filter(([,v])=>v>0);
@@ -4127,45 +4891,90 @@ export default function App() {
             </div>
 
 
-            {/* ── Sector Diversification Donut ────────────────────────────────── */}
+            {/* ── Sector Diversification Donut ─────────────────────────────────── */}
             {(() => {
+              // Map tickers to sectors using Finnhub data + fallback map
               const SECTOR_MAP = {
+                // Tech
                 "AAPL":"Technologie","MSFT":"Technologie","NVDA":"Technologie","GOOGL":"Technologie",
                 "META":"Technologie","AMZN":"Technologie","TSLA":"Technologie","INTC":"Technologie",
                 "AMD":"Technologie","AVGO":"Technologie","ORCL":"Technologie","CRM":"Technologie",
-                "SHOP":"Technologie","ADBE":"Technologie","QCOM":"Technologie","UMC":"Technologie",
-                "QQQ":"ETF","VWCE":"ETF","VTI":"ETF","SPY":"ETF","CNDX.L":"ETF",
+                "SHOP":"Technologie","ADBE":"Technologie","QCOM":"Technologie","AMAT":"Technologie",
+                "CNDX.L":"Technologie","QQQ":"Technologie","MSTR":"Technologie","PLTR":"Technologie",
+                // Finance
                 "JPM":"Finance","BAC":"Finance","V":"Finance","MA":"Finance","GS":"Finance",
-                "MS":"Finance","BLK":"Finance","AXP":"Finance","WFC":"Finance",
+                "MS":"Finance","BLK":"Finance","AXP":"Finance","WFC":"Finance","C":"Finance",
+                "PFLT":"Finance","BDC":"Finance","ARCC":"Finance",
+                // Healthcare
                 "JNJ":"Zdravotnictví","PFE":"Zdravotnictví","UNH":"Zdravotnictví","LLY":"Zdravotnictví",
-                "ABBV":"Zdravotnictví","MRK":"Zdravotnictví","NVO":"Zdravotnictví",
-                "WMT":"Spotřební","COST":"Spotřební","PG":"Spotřební","KO":"Spotřební",
-                "PEP":"Spotřební","MCD":"Spotřební","SBUX":"Spotřební","NKE":"Spotřební",
-                "PM":"Spotřební","FRA:TBK":"Spotřební","TABAK.PR":"Spotřební","MO":"Spotřební",
-                "XOM":"Energie","CVX":"Energie","COP":"Energie","NEE":"Energie",
-                "O":"REIT","IRM":"REIT","SPG":"REIT","AMT":"REIT","PLD":"REIT",
-                "CEZ":"Utility","CEZ.PR":"Utility","MM0":"Finance","MONET.PR":"Finance",
+                "ABBV":"Zdravotnictví","MRK":"Zdravotnictví","TMO":"Zdravotnictví","ABT":"Zdravotnictví",
+                "AMGN":"Zdravotnictví","GILD":"Zdravotnictví","CVS":"Zdravotnictví","NVO":"Zdravotnictví",
+                // Consumer
+                "WMT":"Spotřební zboží","COST":"Spotřební zboží","PG":"Spotřební zboží",
+                "KO":"Spotřební zboží","PEP":"Spotřební zboží","MCD":"Spotřební zboží",
+                "SBUX":"Spotřební zboží","NKE":"Spotřební zboží","MO":"Spotřební zboží",
+                "PM":"Spotřební zboží","TSM":"Spotřební zboží","UL":"Spotřební zboží",
+                // Industrial
                 "CAT":"Průmysl","BA":"Průmysl","HON":"Průmysl","GE":"Průmysl","UPS":"Průmysl",
-                "DAL":"Průmysl","RCL":"Průmysl","AHT":"REIT",
+                "RTX":"Průmysl","LMT":"Průmysl","DE":"Průmysl","MMM":"Průmysl",
+                // Energy
+                "XOM":"Energie","CVX":"Energie","COP":"Energie","EOG":"Energie","SLB":"Energie",
+                "NEE":"Energie","D":"Energie","DUK":"Energie","SO":"Energie",
+                // REIT
+                "O":"REIT","IRM":"REIT","SPG":"REIT","AMT":"REIT","PLD":"REIT","VTR":"REIT",
+                "NNN":"REIT","STAG":"REIT","AGNC":"REIT","MPW":"REIT",
+                // Diversified ETF
+                "SPY":"ETF – Diverzif.","QQQ":"ETF – Diverzif.","VWCE":"ETF – Diverzif.",
+                "VTI":"ETF – Diverzif.","VUAA.L":"ETF – Diverzif.","CNDX.L":"ETF – Tech.",
+                "LYP6.DE":"ETF – Diverzif.","EMIM":"ETF – Rozvíj. trhy","MEUD":"ETF – Diverzif.",
+                // Telecom
+                "T":"Telekomunikace","VZ":"Telekomunikace","TMUS":"Telekomunikace",
+                "VOD":"Telekomunikace","ORAN":"Telekomunikace",
+                // Crypto
                 "BTC":"Krypto","ETH":"Krypto","BTC-USD":"Krypto","ETH-USD":"Krypto",
+                "SOL":"Krypto","ADA":"Krypto",
+                // Czech
+                "CEZ":"Energie","CEZ.PR":"Energie","MM0":"Finance","MONET.PR":"Finance",
+                "FRA:TBK":"Spotřební zboží","KOMB.PR":"Finance","CZG.PR":"Průmysl",
+                // Airlines/Travel
+                "DAL":"Průmysl","UAL":"Průmysl","AAL":"Průmysl","RCL":"Spotřební zboží",
+                "CCL":"Spotřební zboží","NCLH":"Spotřební zboží",
+                // Communication
+                "DIS":"Komunikace","NFLX":"Komunikace","GOOGL":"Technologie","META":"Technologie",
+                "CMCSA":"Komunikace","WBD":"Komunikace","PARA":"Komunikace","STLA":"Průmysl",
+                // Materials
+                "BHP":"Materiály","RIO":"Materiály","FCX":"Materiály","NEM":"Materiály",
+                "GOLD":"Materiály","GLD":"Komodity – Zlato","IAU":"Komodity – Zlato",
               };
+
               const SECTOR_COLORS = {
-                "Technologie":"#6366f1","ETF":"#06b6d4","Finance":"#10b981",
-                "Zdravotnictví":"#ec4899","Spotřební":"#f59e0b","Energie":"#f97316",
-                "REIT":"#8b5cf6","Utility":"#22d3a0","Průmysl":"#3b82f6",
-                "Krypto":"#f59e0b","Jiné":"#64748b",
+                "Technologie":"#6366f1","Finance":"#10b981","Zdravotnictví":"#3b82f6",
+                "Spotřební zboží":"#f59e0b","Průmysl":"#8b5cf6","Energie":"#ef4444",
+                "REIT":"#22d3a0","Komunikace":"#ec4899","Materiály":"#a78bfa",
+                "Telekomunikace":"#60a5fa","Krypto":"#f97316","Komodity – Zlato":"#fbbf24",
+                "ETF – Diverzif.":"#94a3b8","ETF – Tech.":"#818cf8","ETF – Rozvíj. trhy":"#4ade80",
+                "Nemovitosti":"#0ea5e9","Hotovost":"#475569","Jiné":"#64748b",
               };
+
+              // Build sector data from buy positions
               const sectorVals = {};
-              portfolio.positions.forEach(p => {
-                const sector = SECTOR_MAP[p.ticker] || SECTOR_MAP[p.ticker?.replace(".PR","").replace(".pl","")] ||
-                  (p.category==="crypto"?"Krypto":p.category==="etf"?"ETF":p.category==="real_estate"?"Nemovitosti":"Jiné");
+              portfolio.positions.filter(p => p.category !== "cash").forEach(p => {
+                const sector = SECTOR_MAP[p.ticker] || prices[p.ticker]?.sector
+                  || (p.category==="etf"?"ETF – Diverzif."
+                    :p.category==="crypto"?"Krypto"
+                    :p.category==="real_estate"?"Nemovitosti"
+                    :"Jiné");
                 const val = p.currentValueCZK > 0 ? p.currentValueCZK : p.totalCostCZK;
                 sectorVals[sector] = (sectorVals[sector]||0) + val;
               });
-              const sEntries = Object.entries(sectorVals).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+
+              const sEntries = Object.entries(sectorVals).filter(([,v])=>v>0)
+                .sort((a,b)=>b[1]-a[1]);
               const sTotal = sEntries.reduce((s,[,v])=>s+v,0)||1;
               if (!sEntries.length) return null;
-              const rad=80, cx=100, cy=100, W=200, H=200;
+
+              // SVG donut
+              const rad=85, cx=110, cy=110, W=220, H=220;
               let ang = -Math.PI/2;
               const slices = sEntries.map(([sector,val])=>{
                 const slice = val/sTotal*Math.PI*2;
@@ -4173,176 +4982,82 @@ export default function App() {
                 ang+=slice;
                 const x2=cx+rad*Math.cos(ang), y2=cy+rad*Math.sin(ang);
                 const midAng = ang - slice/2;
-                const lx=cx+(rad*0.7)*Math.cos(midAng), ly=cy+(rad*0.7)*Math.sin(midAng);
-                return {sector,val,slice,x1,y1,x2,y2,large:slice>Math.PI?1:0,lx,ly};
+                const lx=cx+(rad*0.75)*Math.cos(midAng), ly=cy+(rad*0.75)*Math.sin(midAng);
+                return {sector,val,slice,x1,y1,x2,y2,large:slice>Math.PI?1:0,lx,ly,midAng};
               });
+
               return (
                 <div style={{...S.card,marginBottom:14}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
-                    <div style={S.sectionTitle}>{lang==="en"?"Sector Diversification":"Diverzifikace — sektory"}</div>
-                    <div style={{fontSize:11,color:textMuted}}>{sEntries.length} {lang==="en"?"sectors":"sektorů"}</div>
+                    <div style={S.sectionTitle}>Diverzifikace — sektory</div>
+                    <div style={{fontSize:11,color:textMuted}}>{sEntries.length} sektorů · pouze akcie</div>
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"auto 1fr",gap:20,alignItems:"center"}}>
-                    <div>
-                      <svg viewBox={`0 0 ${W} ${H}`} style={{width:isMobile?"100%":200,height:"auto"}}
+                    {/* Donut */}
+                    <div style={{position:"relative"}}>
+                      <svg viewBox={`0 0 ${W} ${H}`} style={{width:isMobile?"100%":220,height:"auto"}}
                         onMouseLeave={()=>setHovCat(null)}>
-                        {slices.map(s=>{
+                        {slices.map((s,i)=>{
                           const isHov = hovCat?.cat===s.sector;
                           const r2 = isHov ? rad+6 : rad;
                           const color = SECTOR_COLORS[s.sector]||"#64748b";
                           return (
                             <g key={s.sector}>
-                              <path d={`M${cx},${cy} L${s.x1},${s.y1} A${r2},${r2} 0 ${s.large},1 ${s.x2},${s.y2} Z`}
-                                fill={color} opacity={isHov?1:hovCat?0.45:0.88}
+                              <path
+                                d={`M${cx},${cy} L${s.x1},${s.y1} A${r2},${r2} 0 ${s.large},1 ${s.x2},${s.y2} Z`}
+                                fill={color} opacity={isHov?1:hovCat?0.45:0.9}
                                 style={{cursor:"pointer",transition:"all .15s"}}
                                 onMouseEnter={()=>setHovCat({cat:s.sector,val:s.val})}/>
-                              {s.slice > 0.3 && (
+                              {s.slice > 0.25 && (
                                 <text x={s.lx} y={s.ly} textAnchor="middle" fill="#fff"
-                                  fontSize="7.5" fontWeight="700" pointerEvents="none">
+                                  fontSize="7" fontWeight="700" pointerEvents="none">
                                   {(s.val/sTotal*100).toFixed(0)}%
                                 </text>
                               )}
                             </g>
                           );
                         })}
+                        {/* Center hole */}
                         <circle cx={cx} cy={cy} r={rad*0.48} fill={bgCard}/>
+                        {/* Center text */}
                         {hovCat ? (
                           <>
-                            <text x={cx} y={cy-8} textAnchor="middle" fill={SECTOR_COLORS[hovCat.cat]||accent} fontSize="9" fontWeight="700">{hovCat.cat}</text>
-                            <text x={cx} y={cy+6} textAnchor="middle" fill={textPrimary} fontSize="8">{fmt(hovCat.val,"CZK",0)}</text>
-                            <text x={cx} y={cy+18} textAnchor="middle" fill={textMuted} fontSize="8">{(hovCat.val/sTotal*100).toFixed(1)}%</text>
+                            <text x={cx} y={cy-8} textAnchor="middle" fill={SECTOR_COLORS[hovCat.cat]||accent} fontSize="10" fontWeight="800">{hovCat.cat}</text>
+                            <text x={cx} y={cy+6} textAnchor="middle" fill={textPrimary} fontSize="9" fontWeight="700">{fmt(hovCat.val,"CZK",0)}</text>
+                            <text x={cx} y={cy+18} textAnchor="middle" fill={textMuted} fontSize="9">{(hovCat.val/sTotal*100).toFixed(1)}%</text>
                           </>
                         ) : (
                           <>
-                            <text x={cx} y={cy-4} textAnchor="middle" fill={textPrimary} fontSize="9" fontWeight="700">{lang==="en"?"SECTORS":"SEKTORY"}</text>
-                            <text x={cx} y={cy+10} textAnchor="middle" fill={textMuted} fontSize="8">{sEntries.length} {lang==="en"?"sectors":"sektorů"}</text>
+                            <text x={cx} y={cy-5} textAnchor="middle" fill={textPrimary} fontSize="10" fontWeight="700">SEKTORY</text>
+                            <text x={cx} y={cy+9} textAnchor="middle" fill={textMuted} fontSize="8">{sEntries.length} skupin</text>
                           </>
                         )}
                       </svg>
                     </div>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 16px"}}>
+                    {/* Legend */}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px 16px"}}>
                       {sEntries.map(([sector,val])=>(
-                        <div key={sector} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",
-                          padding:"3px 6px",borderRadius:6,background:hovCat?.cat===sector?(SECTOR_COLORS[sector]||accent)+"22":"transparent"}}
+                        <div key={sector}
+                          style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",
+                            padding:"3px 6px",borderRadius:6,
+                            background:hovCat?.cat===sector?(SECTOR_COLORS[sector]||"#64748b")+"22":"transparent",
+                            transition:"background .15s"}}
                           onMouseEnter={()=>setHovCat({cat:sector,val})}
                           onMouseLeave={()=>setHovCat(null)}>
                           <div style={{width:10,height:10,borderRadius:2,background:SECTOR_COLORS[sector]||"#64748b",flexShrink:0}}/>
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:10,color:textPrimary,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{sector}</div>
-                            <div style={{fontSize:9,color:textMuted}}>{(val/sTotal*100).toFixed(1)}%</div>
+                            <div style={{fontSize:9,color:textMuted}}>{fmt(val,"CZK",0)}</div>
                           </div>
+                          <span style={{fontSize:10,fontWeight:700,color:SECTOR_COLORS[sector]||textMuted,flexShrink:0}}>
+                            {(val/sTotal*100).toFixed(1)}%
+                          </span>
                         </div>
                       ))}
                     </div>
                   </div>
-                </div>
-              );
-            })()}
-
-            {/* ── Sector Diversification Donut ────────────────────────────────── */}
-            {(() => {
-              const SECTOR_MAP = {
-                "AAPL":"Technologie","MSFT":"Technologie","NVDA":"Technologie","GOOGL":"Technologie",
-                "META":"Technologie","AMZN":"Technologie","TSLA":"Technologie","INTC":"Technologie",
-                "AMD":"Technologie","AVGO":"Technologie","ORCL":"Technologie","CRM":"Technologie",
-                "SHOP":"Technologie","ADBE":"Technologie","QCOM":"Technologie","UMC":"Technologie",
-                "QQQ":"ETF","VWCE":"ETF","VTI":"ETF","SPY":"ETF","CNDX.L":"ETF","DIA":"ETF",
-                "JPM":"Finance","BAC":"Finance","V":"Finance","MA":"Finance","GS":"Finance",
-                "MS":"Finance","BLK":"Finance","MM0":"Finance","MONET.PR":"Finance",
-                "JNJ":"Zdravotnictví","PFE":"Zdravotnictví","UNH":"Zdravotnictví","LLY":"Zdravotnictví",
-                "ABBV":"Zdravotnictví","MRK":"Zdravotnictví","NVO":"Zdravotnictví",
-                "WMT":"Spotřební","COST":"Spotřební","PG":"Spotřební","KO":"Spotřební",
-                "PEP":"Spotřební","MCD":"Spotřební","SBUX":"Spotřební","NKE":"Spotřební",
-                "PM":"Spotřební","FRA:TBK":"Spotřební","MO":"Spotřební",
-                "XOM":"Energie","CVX":"Energie","COP":"Energie","NEE":"Energie",
-                "O":"REIT","IRM":"REIT","SPG":"REIT","AMT":"REIT","PLD":"REIT","AHT":"REIT",
-                "CEZ":"Utility","CEZ.PR":"Utility","D":"Utility","DUK":"Utility","SO":"Utility",
-                "CAT":"Průmysl","BA":"Průmysl","HON":"Průmysl","GE":"Průmysl","UPS":"Průmysl",
-                "DAL":"Průmysl","RCL":"Průmysl",
-                "BTC":"Krypto","ETH":"Krypto","BTC-USD":"Krypto","ETH-USD":"Krypto",
-              };
-              const SECTOR_COLORS = {
-                "Technologie":"#6366f1","ETF":"#06b6d4","Finance":"#10b981",
-                "Zdravotnictví":"#ec4899","Spotřební":"#f59e0b","Energie":"#f97316",
-                "REIT":"#8b5cf6","Utility":"#22d3a0","Průmysl":"#3b82f6",
-                "Krypto":"#fbbf24","Nemovitosti":"#f97316","Jiné":"#64748b",
-              };
-              const sectorVals = {};
-              portfolio.positions.forEach(p => {
-                const sector = SECTOR_MAP[p.ticker] ||
-                  (p.category==="crypto"?"Krypto":p.category==="etf"?"ETF":
-                   p.category==="real_estate"?"Nemovitosti":"Jiné");
-                const val = p.currentValueCZK > 0 ? p.currentValueCZK : p.totalCostCZK;
-                sectorVals[sector] = (sectorVals[sector]||0) + val;
-              });
-              const sEntries = Object.entries(sectorVals).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
-              const sTotal = sEntries.reduce((s,[,v])=>s+v,0)||1;
-              if (!sEntries.length) return null;
-              const rad=80, cx=100, cy=100, W=200, H=200;
-              let ang = -Math.PI/2;
-              const slices = sEntries.map(([sector,val])=>{
-                const slice = val/sTotal*Math.PI*2;
-                const x1=cx+rad*Math.cos(ang), y1=cy+rad*Math.sin(ang);
-                ang+=slice;
-                const x2=cx+rad*Math.cos(ang), y2=cy+rad*Math.sin(ang);
-                const midAng = ang - slice/2;
-                const lx=cx+(rad*0.7)*Math.cos(midAng), ly=cy+(rad*0.7)*Math.sin(midAng);
-                return {sector,val,slice,x1,y1,x2,y2,large:slice>Math.PI?1:0,lx,ly};
-              });
-              return (
-                <div style={{...S.card,marginBottom:14}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                    <div style={S.sectionTitle}>{lang==="en"?"Sector Diversification":"Diverzifikace — sektory"}</div>
-                    <div style={{fontSize:11,color:textMuted}}>{sEntries.length} {lang==="en"?"sectors":"sektorů"}</div>
-                  </div>
-                  <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"200px 1fr",gap:20,alignItems:"center"}}>
-                    <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:"auto"}}
-                      onMouseLeave={()=>setHovCat(null)}>
-                      {slices.map(s=>{
-                        const isHov = hovCat?.cat===s.sector;
-                        const r2 = isHov ? rad+6 : rad;
-                        const color = SECTOR_COLORS[s.sector]||"#64748b";
-                        return (
-                          <g key={s.sector}>
-                            <path d={`M${cx},${cy} L${s.x1},${s.y1} A${r2},${r2} 0 ${s.large},1 ${s.x2},${s.y2} Z`}
-                              fill={color} opacity={isHov?1:hovCat?0.45:0.88}
-                              style={{cursor:"pointer",transition:"all .15s"}}
-                              onMouseEnter={()=>setHovCat({cat:s.sector,val:s.val})}/>
-                            {s.slice > 0.3 && (
-                              <text x={s.lx} y={s.ly} textAnchor="middle" fill="#fff" fontSize="7.5" fontWeight="700" pointerEvents="none">
-                                {(s.val/sTotal*100).toFixed(0)}%
-                              </text>
-                            )}
-                          </g>
-                        );
-                      })}
-                      <circle cx={cx} cy={cy} r={rad*0.48} fill={bgCard}/>
-                      {hovCat ? (
-                        <>
-                          <text x={cx} y={cy-8} textAnchor="middle" fill={SECTOR_COLORS[hovCat.cat]||accent} fontSize="9" fontWeight="700">{hovCat.cat}</text>
-                          <text x={cx} y={cy+6} textAnchor="middle" fill={textPrimary} fontSize="8">{fmt(hovCat.val,"CZK",0)}</text>
-                          <text x={cx} y={cy+18} textAnchor="middle" fill={textMuted} fontSize="8">{(hovCat.val/sTotal*100).toFixed(1)}%</text>
-                        </>
-                      ) : (
-                        <>
-                          <text x={cx} y={cy-4} textAnchor="middle" fill={textPrimary} fontSize="9" fontWeight="700">{lang==="en"?"SECTORS":"SEKTORY"}</text>
-                          <text x={cx} y={cy+10} textAnchor="middle" fill={textMuted} fontSize="8">{sEntries.length}</text>
-                        </>
-                      )}
-                    </svg>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 16px"}}>
-                      {sEntries.map(([sector,val])=>(
-                        <div key={sector} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",
-                          padding:"3px 6px",borderRadius:6,background:hovCat?.cat===sector?(SECTOR_COLORS[sector]||accent)+"22":"transparent"}}
-                          onMouseEnter={()=>setHovCat({cat:sector,val})} onMouseLeave={()=>setHovCat(null)}>
-                          <div style={{width:10,height:10,borderRadius:2,background:SECTOR_COLORS[sector]||"#64748b",flexShrink:0}}/>
-                          <div style={{flex:1}}>
-                            <div style={{fontSize:10,color:textPrimary,fontWeight:600}}>{sector}</div>
-                            <div style={{fontSize:9,color:textMuted}}>{(val/sTotal*100).toFixed(1)}% · {fmt(val,"CZK",0)}</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                  <div style={{fontSize:10,color:textMuted,marginTop:8,fontStyle:"italic"}}>
+                    * Sektory jsou přiřazeny automaticky dle tickeru. Neznámé tickery jsou zařazeny do "Jiné".
                   </div>
                 </div>
               );
@@ -4594,19 +5309,19 @@ export default function App() {
                     }).map(p=>{
                       const typeColor = {buy:"#10b981",sell:"#ef4444",dividend:"#8b5cf6",deposit:"#22d3a0",withdraw:"#f59e0b"};
                       const isPos = p.gainCZK >= 0;
+                      const noPx = !p.currentPrice || p.currentPrice === 0;
                       return (
-                        <tr key={p.ticker} style={{ borderLeft:`2px solid ${catColor[p.category]||"#334155"}` }}>
+                        <tr key={p.ticker} style={{ borderLeft:`2px solid ${noPx?"#f59e0b":catColor[p.category]||"#334155"}`,background:noPx?"#f59e0b08":"transparent" }}>
                           <td style={S.td}>
-                            <div style={{fontWeight:700,color:textPrimary,display:"flex",alignItems:"center",gap:4}}>
-                              {p.ticker}
-                              {(!prices[p.ticker]?.price||prices[p.ticker]?.price===0) &&
-                                <span title="Živá cena chybí — doplň v Nastavení" style={{color:"#f59e0b",fontSize:10,cursor:"help"}}>⚠</span>}
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <span style={{fontWeight:700,color:textPrimary}}>{p.ticker}</span>
+                              {noPx&&<span title="Cena není k dispozici — zadej ručně v Nastavení → Ruční update cen" style={{background:"#f59e0b22",color:"#f59e0b",fontSize:9,fontWeight:700,padding:"1px 5px",borderRadius:4,cursor:"help",border:"1px solid #f59e0b44"}}>⚠ bez ceny</span>}
                             </div>
                             <div style={{fontSize:9,color:textMuted}}>{(tickerNames[p.ticker]||KNOWN_NAMES[p.ticker]||p.name||"")?.slice(0,20)}</div>
                             <span style={S.badge(catColor[p.category]||"#64748b")}>{catLabel[p.category]||p.category}</span>
                           </td>
                           <td style={S.td}>
-                            <div style={{fontWeight:600,color:textPrimary}}>{fmt(p.currentValueCZK,"CZK",0)}</div>
+                            <div style={{fontWeight:600,color:noPx?"#f59e0b":textPrimary}}>{noPx?"⚠ neznámá":fmt(p.currentValueCZK,"CZK",0)}</div>
                             <div style={{fontSize:10,color:textMuted}}>{p.totalQty.toFixed(p.category==="crypto"?4:2)} ks</div>
                           </td>
                           <td style={S.td}>
@@ -4759,7 +5474,7 @@ export default function App() {
                   <div style={{overflowX:"auto"}}>
                     <table style={S.table}>
                       <thead><tr>
-                        {[lang==="en"?"Date":"Datum","Typ",lang==="en"?"Ticker":"Ticker","Kat.",lang==="en"?"Qty":"Mn.",lang==="en"?"Price":"Cena",lang==="en"?"Fee":"Popl.",lang==="en"?"Total CZK":"CZK",""].map((h,i)=>(
+                        {["",lang==="en"?"Date":"Datum","Typ",lang==="en"?"Ticker":"Ticker","Kat.",lang==="en"?"Qty":"Mn.",lang==="en"?"Price":"Cena",lang==="en"?"Fee":"Popl.",lang==="en"?"Total CZK":"CZK / čistá div.",""].map((h,i)=>(
                           <th key={i} style={S.th}>{h}</th>
                         ))}
                       </tr></thead>
@@ -4773,13 +5488,13 @@ export default function App() {
                           const cc = TX_CAT_COLORS[t.category]||"#64748b";
                           const tl = TX_TYPE_LABELS[t.type]||t.type;
                           const cl = TX_CAT_LABELS[t.category]||t.category;
-                          // dividendAmount stored in CZK if auto-calculated, else convert
+                          // getDivCZK: t.dividendCZK=true means dividendAmount is already in CZK
+                          // Legacy records without flag: convert from original currency
                           const getDivCZK=(t)=>{
-                            if(t.dividendAmountCZK) return t.dividendAmountCZK;
                             const amt=t.dividendAmount||0;
-                            // If currency CZK or amount looks like CZK (>100 for most), use direct
-                            if(t.currency==="CZK") return amt;
-                            return toCZK(amt,t.currency||"USD",rates);
+                            if(!amt) return 0;
+                            if(t.dividendCZK||t.currency==="CZK") return amt;
+                            return toCZK(amt, t.currency||"USD", rates);
                           };
                           const totalCZK = t.type==="dividend"?getDivCZK(t)
                             :(t.type==="deposit"||t.type==="withdraw")?toCZK(t.amount||0,t.currency,rates)
@@ -4796,14 +5511,23 @@ export default function App() {
                               <td style={S.td}>
                                 {isDepWith
                                   ? <span style={{color:textMuted,fontSize:11}}>–</span>
-                                  : <><b style={{color:textPrimary}}>{t.ticker}</b><div style={{fontSize:9,color:textMuted}}>{(tickerNames[t.ticker]||KNOWN_NAMES[t.ticker]||t.name||"")?.slice(0,16)}</div></>}
+                                  : <>
+                                      <div style={{display:"flex",alignItems:"center",gap:5}}>
+                                        <b style={{color:textPrimary}}>{t.ticker}</b>
+                                        {t.type==="buy"&&(!prices[t.ticker]||!prices[t.ticker]?.price)&&(
+                                          <span title="Živá cena chybí — doplň v Nastavení → Ruční update cen"
+                                            style={{background:"#f59e0b22",color:"#f59e0b",fontSize:8,fontWeight:700,padding:"1px 4px",borderRadius:3,border:"1px solid #f59e0b55",cursor:"help"}}>⚠</span>
+                                        )}
+                                      </div>
+                                      <div style={{fontSize:9,color:textMuted}}>{(tickerNames[t.ticker]||KNOWN_NAMES[t.ticker]||t.name||"")?.slice(0,16)}</div>
+                                    </>}
                               </td>
                               <td style={S.td}>
                                 <span style={{...S.badge(cc),minWidth:52,textAlign:"center",display:"inline-block"}}>{cl}</span>
                               </td>
                               <td style={S.td}>{isDepWith||t.type==="dividend"?"–":t.quantity}</td>
                               <td style={S.td}>
-                                {t.type==="dividend"?fmt(getDivCZK(t),"CZK",0):isDepWith?fmt(t.amount||0,t.currency,0):`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency==="CZK"?"Kč":t.currency}`}
+                                {t.type==="dividend"?(t.currency==="CZK"||!t.price?`${getDivCZK(t).toLocaleString("cs-CZ",{minimumFractionDigits:0,maximumFractionDigits:2})} Kč`:`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency}`):isDepWith?fmt(t.amount||0,t.currency,0):`${(t.price||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:4})} ${t.currency==="CZK"?"Kč":t.currency}`}
                               </td>
                               <td style={S.td}>{t.fee?`${(t.fee||0).toLocaleString("cs-CZ",{minimumFractionDigits:2,maximumFractionDigits:2})} ${t.currency==="CZK"?"Kč":t.currency}`:"–"}</td>
                               <td style={{...S.td,fontWeight:600,color:t.type==="sell"||t.type==="withdraw"?"#f87171":"#22d3a0"}}>{fmt(totalCZK,"CZK",0)}</td>
@@ -4836,12 +5560,6 @@ export default function App() {
                   ].map((opt,i)=>(
                     <button key={i} style={{...S.btn("danger"),display:"block",width:"100%",textAlign:"left",marginBottom:8,padding:"10px 14px"}}
                       onClick={()=>{
-                        const count=activeTransactions.filter(t=>{
-                          const pid=t.portfolioId||activePortfolioId;
-                          if(pid!==activePortfolioId) return false;
-                          return opt.types.includes(t.type);
-                        }).length;
-                        if(!window.confirm(`⚠ Opravdu smazat ${count} transakcí (${opt.label})? Tato akce je nevratná.`)) return;
                         setTransactions(prev=>prev.filter(t=>{
                           const pid=t.portfolioId||activePortfolioId;
                           if(pid!==activePortfolioId) return true;
@@ -4907,7 +5625,7 @@ export default function App() {
                 const yearDiv = activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear);
                 // dividendAmount is stored in CZK after conversion at entry time
                 // Use totalDividendsCZK from portfolio for current year
-                const received = yearDiv.reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0);
+                const received = yearDiv.reduce((s,t)=>s+((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),0);
                 const upcoming = dividends.filter(d=>new Date(d.date).getFullYear()===divCalYear).reduce((s,d)=>s+toCZK(d.amount||0,d.currency,rates),0);
                 const annualEst = received * 4;
                 return [
@@ -4933,6 +5651,14 @@ export default function App() {
               border={border} bgCard={bgCard} accent={accent} lang={lang}
             />
 
+            <DigrinCalendar
+              transactions={activeTransactions}
+              rates={rates}
+              tickerNames={{...tickerNames,...KNOWN_NAMES}}
+              S={S} textMuted={textMuted} textPrimary={textPrimary} textSec={textSec}
+              border={border} bgCard={bgCard} darkMode={darkMode} lang={lang}
+            />
+
             {/* Monthly calendar */}
             <div style={S.card}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
@@ -4951,7 +5677,7 @@ export default function App() {
               <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
                 {(lang==="en"?T.en.months:T.cs.months).map((monthName,mi)=>{
                   const now3=new Date();
-                  const received2=activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear&&new Date(t.date).getMonth()===mi).reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0);
+                  const received2=activeTransactions.filter(t=>t.type==="dividend"&&new Date(t.date).getFullYear()===divCalYear&&new Date(t.date).getMonth()===mi).reduce((s,t)=>s+((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),0);
                   const upcoming2=dividends.filter(d=>new Date(d.date).getMonth()===mi&&new Date(d.date).getFullYear()===divCalYear).reduce((s,d)=>s+toCZK(d.amount||0,d.currency,rates),0);
                   const isCurrentMonth=mi===now3.getMonth()&&divCalYear===now3.getFullYear();
                   const isPast=new Date(divCalYear,mi+1,1)<=now3;
@@ -4975,6 +5701,13 @@ export default function App() {
         {/* ─── ANALYZA ─────────────────────────────────────────────────────────── */}
         {tab === "analyza" && (
           <AnalyzaTab rates={rates} S={S} t={t} lang={lang} />
+        )}
+
+        {/* ─── TIPY ──────────────────────────────────────────────────────────────── */}
+        {tab === "tipy" && (
+          <TipyTab S={S} lang={lang} rates={rates} darkMode={darkMode}
+            textPrimary={textPrimary} textMuted={textMuted} textSec={textSec}
+            border={border} bgCard={bgCard} />
         )}
 
         {/* ─── FI ──────────────────────────────────────────────────────────────── */}
@@ -5038,37 +5771,15 @@ export default function App() {
                   const exp=fiSettings.monthlyExpenses||50000;
                   const fiNum=exp*12/(swr/100);
                   const monthly=fiSettings.monthlySavings||10000;
-                  const rate=(fiSettings.annualReturn||7)/100/12;
+                  const rate=fiSettings.annualReturn||7;
                   const curr=portfolio.totalCurrentCZK||0;
-                  const pts=[];
-                  let val2=curr;
-                  for(let i=0;i<=30;i++){
-                    pts.push({y:i,v:val2});
-                    for(let m=0;m<12;m++){val2=val2*(1+rate)+monthly;}
-                  }
-                  const maxV2=Math.max(...pts.map(p=>p.v),fiNum,1);
-                  const w2=300,h2=180,pad2={t:10,b:24,l:56,r:10};
-                  const iW2=w2-pad2.l-pad2.r,iH2=h2-pad2.t-pad2.b;
-                  const xS2=i=>pad2.l+(i/30)*iW2;
-                  const yS2=v=>pad2.t+iH2-(v/maxV2)*iH2;
-                  const path2=pts.map((p,i)=>`${i===0?"M":"L"}${xS2(p.y)},${yS2(p.v)}`).join(" ");
-                  const fiY=pts.find(p=>p.v>=fiNum)?.y;
                   return (
-                    <svg viewBox={`0 0 ${w2} ${h2}`} style={{width:"100%",height:"auto"}}>
-                      {[0,0.25,0.5,0.75,1].map(t3=>(
-                        <g key={t3}>
-                          <line x1={pad2.l} y1={pad2.t+iH2*t3} x2={w2-pad2.r} y2={pad2.t+iH2*t3} stroke="#1e293b" strokeWidth="1"/>
-                          <text x={pad2.l-4} y={pad2.t+iH2*t3+4} textAnchor="end" fill="#8b9fc0" fontSize="8">{(maxV2*(1-t3)/1e6).toFixed(1)}M</text>
-                        </g>
-                      ))}
-                      <line x1={pad2.l} y1={yS2(fiNum)} x2={w2-pad2.r} y2={yS2(fiNum)} stroke="#10b981" strokeWidth="1" strokeDasharray="4,3"/>
-                      <text x={w2-pad2.r} y={yS2(fiNum)-4} textAnchor="end" fill="#10b981" fontSize="8">FI {(fiNum/1e6).toFixed(1)}M</text>
-                      <path d={path2} fill="none" stroke={accent} strokeWidth="2"/>
-                      {fiY!=null&&<circle cx={xS2(fiY)} cy={yS2(fiNum)} r="4" fill="#10b981"/>}
-                      {[0,5,10,15,20,25,30].map(y=>(
-                        <text key={y} x={xS2(y)} y={h2-4} textAnchor="middle" fill="#8b9fc0" fontSize="8">{y}r</text>
-                      ))}
-                    </svg>
+                    <FIProjectionChart
+                      currentCZK={curr}
+                      monthlySaving={monthly}
+                      annualReturn={rate}
+                      targetCZK={fiNum}
+                    />
                   );
                 })()}
               </div>
@@ -5090,12 +5801,21 @@ export default function App() {
 
               // Dividendy
               const divs = yearTx.filter(t=>t.type==="dividend");
-              const divGross = divs.reduce((s,t)=>{
-                const perShare = t.dividendPerShare||0;
-                const qty = t.quantity||1;
-                return s + toCZK(perShare*qty, t.currency||"CZK", rates);
-              },0);
-              const divNet = divs.reduce((s,t)=>s+toCZK(t.dividendAmount||0,t.currency||"CZK",rates),0);
+              // Helper: get CZK value of dividend
+              const getDivNetCZK = (t) => (t.dividendCZK||(t.currency||"USD")==="CZK")
+                ? (t.dividendAmount||0)
+                : toCZK(t.dividendAmount||0, t.currency||"USD", rates);
+              // Helper: get gross CZK value (before tax)
+              const getDivGrossCZK = (t) => {
+                const net = getDivNetCZK(t);
+                const tax = (parseFloat(t.divTax)||15)/100;
+                if (t.dividendPerShare && (t.quantity||0)>0)
+                  return toCZK(t.dividendPerShare*(t.quantity||0), t.currency||"CZK", rates);
+                // back-calculate: net = gross*(1-tax) → gross = net/(1-tax)
+                return tax>0 && tax<1 ? net/(1-tax) : net;
+              };
+              const divNet = divs.reduce((s,t)=>s+getDivNetCZK(t), 0);
+              const divGross = divs.reduce((s,t)=>s+getDivGrossCZK(t), 0);
               const divTaxPaid = divGross - divNet;
 
               // ── Prodeje — §10 ZDP ──────────────────────────────────────────────────
@@ -5187,8 +5907,8 @@ export default function App() {
                     {[
                       {l:lang==="en"?"Dividend Income (gross)":"Hrubé dividendy",v:fmt(divGross,"CZK",0),c:"#8b5cf6"},
                       {l:lang==="en"?"Tax withheld on div.":"Sražená daň z div.",v:fmt(divTaxPaid,"CZK",0),c:"#f87171"},
-                      {l:lang==="en"?"Taxable sell gains":"Zdanitelné zisky z prodeje",v:fmt(taxableSellGain,"CZK",0),c:"#f59e0b"},
-                      {l:lang==="en"?"Exempt sell gains (3y+)":"Osvobozené zisky (3+ roky)",v:fmt(exemptSellGain,"CZK",0),c:"#10b981"},
+                      {l:lang==="en"?"Taxable sell gains":"Zdanitelné zisky z prodeje",v:fmt(netSellGain,"CZK",0),c:"#f59e0b"},
+                      {l:lang==="en"?"Exempt sell gains (3y+)":"Osvobozené zisky (3+ roky)",v:fmt(exemptByTime.reduce((s,t)=>s+t.gainCZK,0),"CZK",0),c:"#10b981"},
                       {l:lang==="en"?"Est. total tax (15%)":"Odhadovaná daň (15%)",v:fmt(estimatedTax,"CZK",0),c:"#ef4444"},
                     ].map((s,i)=>(
                       <div key={i} style={{...S.statCard(s.c)}}>
@@ -5211,15 +5931,16 @@ export default function App() {
                         </tr></thead>
                         <tbody>
                           {divs.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>{
-                            const gross = toCZK((t.dividendPerShare||0)*(t.quantity||1),t.currency||"CZK",rates);
-                            const net = toCZK(t.dividendAmount||0,t.currency||"CZK",rates);
+                            const net = getDivNetCZK(t);
+                            const gross = getDivGrossCZK(t);
+                            const taxAmt = gross - net;
                             return (
                               <tr key={t.id}>
                                 <td style={S.td}>{fmtDate(t.date)}</td>
                                 <td style={S.td}><b style={{color:textPrimary}}>{t.ticker}</b></td>
                                 <td style={S.td}>{t.currency||"CZK"}</td>
-                                <td style={S.td}>{t.dividendPerShare?`${t.dividendPerShare} ${t.currency}/ks`:"–"}</td>
-                                <td style={S.td}>{t.divTax||15}%</td>
+                                <td style={S.td}>{t.dividendPerShare?`${t.dividendPerShare} ${t.currency}/ks`:fmt(gross,"CZK",0)}</td>
+                                <td style={S.td}>{t.divTax||15}% ({fmt(taxAmt,"CZK",0)})</td>
                                 <td style={{...S.td,color:"#10b981",fontWeight:600}}>{fmt(net,"CZK",0)}</td>
                                 <td style={{...S.td,color:textMuted,fontSize:10}}>§8 daň. přiznání</td>
                               </tr>
@@ -5310,7 +6031,7 @@ export default function App() {
                     <tr>
                       <td>${t.date}</td>
                       <td>${t.ticker}</td>
-                      <td style="text-align:right">${fmt(toCZK(t.dividendAmount||0,t.currency||"CZK",rates),"CZK",0)}</td>
+                      <td style="text-align:right">${fmt(((t.dividendCZK||(t.currency||"USD")==="CZK")?(t.dividendAmount||0):toCZK(t.dividendAmount||0,t.currency||"USD",rates)),"CZK",0)}</td>
                     </tr>`).join("");
                   const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
                     <title>InvestTrack Report ${reportDate}</title>
@@ -5399,34 +6120,39 @@ export default function App() {
               </div>
               {pricesStatus==="ok"&&<div style={{fontSize:11,color:"#22d3a0",marginBottom:10}}>✓ {lang==="en"?"Prices updated":"Ceny aktualizovány"}</div>}
               {pricesStatus==="error"&&<div style={{fontSize:11,color:"#f87171",marginBottom:10}}>⚠ {lang==="en"?"Could not fetch prices":"Nepodařilo se načíst ceny"}</div>}
-              {(() => {
-                const missingPrices = Object.entries(prices).filter(([,v])=>!v?.price||v.price===0);
-                return missingPrices.length > 0 ? (
-                  <div style={{background:"#f59e0b22",border:"1px solid #f59e0b44",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:11,color:"#f59e0b"}}>
-                    ⚠ {missingPrices.length} ticker{missingPrices.length>1?"ů":""} bez ceny: {missingPrices.map(([t])=>t).join(", ")}
-                  </div>
-                ) : <div style={{background:"#10b98122",border:"1px solid #10b98144",borderRadius:8,padding:"6px 12px",marginBottom:12,fontSize:11,color:"#10b981"}}>✓ Všechny ceny jsou doplněny</div>;
-              })()}
-              {(() => {
-                const missingP = Object.entries(prices).filter(([,v])=>!v?.price||v.price===0);
-                return missingP.length > 0 ? (
-                  <div style={{background:"#f59e0b22",border:"1px solid #f59e0b44",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:11,color:"#f59e0b"}}>
-                    ⚠ {missingP.length} ticker{missingP.length>1?"ů":""} bez ceny: <b>{missingP.slice(0,8).map(([t])=>t).join(", ")}{missingP.length>8?"...":""}</b>
-                  </div>
-                ) : <div style={{background:"#10b98122",border:"1px solid #10b98144",borderRadius:8,padding:"6px 12px",marginBottom:12,fontSize:11,color:"#10b981"}}>✓ Všechny ceny jsou doplněny</div>;
-              })()}
               <div style={S.sectionTitle}>{lang==="en"?"Manual Price Update":"Ruční update cen"}</div>
-              {Object.entries(prices).filter(([,v])=>v?.price!==undefined).map(([ticker,data])=>(
-                <div key={ticker} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
-                  <span style={{fontWeight:700,color:textPrimary,minWidth:80}}>{ticker}</span>
-                  <input type="number" step="0.01" value={data.price} onChange={e=>setPrices(prev=>({...prev,[ticker]:{...prev[ticker],price:parseFloat(e.target.value)||0}}))} style={{...S.input,width:110}}/>
+              {/* Sort: missing prices first */}
+              {Object.entries(prices).filter(([,v])=>v?.price!==undefined)
+                .sort(([,a],[,b]) => (a.price>0?1:0)-(b.price>0?1:0))
+                .map(([ticker,data])=>{
+                  const missingPrice = !data.price || data.price === 0;
+                  return (
+                <div key={ticker} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap",
+                  background:missingPrice?"#f59e0b0a":"transparent",
+                  border:missingPrice?"1px solid #f59e0b33":"1px solid transparent",
+                  borderRadius:8,padding:missingPrice?"6px 8px":"0",
+                  transition:"all .2s"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,minWidth:100}}>
+                    {missingPrice&&<span style={{color:"#f59e0b",fontSize:14}}>⚠</span>}
+                    <span style={{fontWeight:700,color:missingPrice?"#f59e0b":textPrimary}}>{ticker}</span>
+                    {missingPrice&&<span style={{fontSize:9,color:"#f59e0b",fontWeight:600}}>doplň cenu</span>}
+                  </div>
+                  <input type="number" step="0.01" value={data.price} onChange={e=>setPrices(prev=>({...prev,[ticker]:{...prev[ticker],price:parseFloat(e.target.value)||0}}))}
+                    style={{...S.input,width:110,borderColor:missingPrice?"#f59e0b":undefined}}
+                    placeholder="0.00"/>
                   <select value={data.currency||"USD"} onChange={e=>setPrices(prev=>({...prev,[ticker]:{...prev[ticker],currency:e.target.value}}))} style={{...S.select,width:80}}>
                     {["USD","EUR","CZK","GBP"].map(c=><option key={c} value={c}>{c}</option>)}
                   </select>
                   {data.lastUpdated&&<span style={{fontSize:9,color:textMuted}}>{new Date(data.lastUpdated).toLocaleTimeString("cs-CZ",{hour:"2-digit",minute:"2-digit"})}</span>}
+                  {!missingPrice&&<span style={{fontSize:9,color:"#10b981"}}>✓</span>}
                   <button style={{...S.btn("danger"),padding:"3px 8px",fontSize:10}} onClick={()=>setPrices(prev=>{const n={...prev};delete n[ticker];return n;})}>✕</button>
                 </div>
-              ))}
+              );})}
+              {Object.entries(prices).filter(([,v])=>!v?.price).length>0&&(
+                <div style={{fontSize:11,color:"#f59e0b",marginTop:4,padding:"6px 10px",background:"#f59e0b11",borderRadius:6,border:"1px solid #f59e0b33"}}>
+                  ⚠ {Object.entries(prices).filter(([,v])=>!v?.price||v.price===0).length} ticker{Object.entries(prices).filter(([,v])=>!v?.price||v.price===0).length>1?"y":""}  bez ceny — hodnota portfolia bude neúplná
+                </div>
+              )}
               <div style={{display:"flex",gap:8,marginTop:10}}>
                 <input placeholder="Ticker" style={{...S.input,width:100}} id="newTickerInput"/>
                 <select id="newTickerCurrency" style={{...S.select,width:80}}>
@@ -5478,13 +6204,14 @@ export default function App() {
               {label:lang==="en"?"Fee":"Poplatek",key:"fee",type:"number",placeholder:"0"},
               {label:lang==="en"?"Gross Div/share":"Hrubá div./akcie",key:"dividendPerShare",type:"number",placeholder:"0.47"},
               {label:lang==="en"?"Tax (%)":"Daň (%)",key:"divTax",type:"number",placeholder:"15"},
-              {label:lang==="en"?"Net div. total (CZK, auto)":"Čistá div. celkem (CZK, auto)",key:"dividendAmount",type:"number",placeholder:"auto"},
+              {label:lang==="en"?"Net div. total (orig. currency, auto)":"Čistá div. celkem (orig. měna, auto)",key:"dividendAmount",type:"number",placeholder:"auto"},
               {label:lang==="en"?"Amount":"Částka",key:"amount",type:"number",placeholder:"5000"},
               {label:lang==="en"?"Note":"Poznámka",key:"notes",type:"text",placeholder:""},
             ].filter(f=>f.key!=="dividendPerShare"||newTx.type==="dividend")
              .filter(f=>f.key!=="divTax"||newTx.type==="dividend")
              .filter(f=>f.key!=="dividendAmount"||newTx.type==="dividend")
              .filter(f=>f.key!=="amount"||newTx.type==="deposit"||newTx.type==="withdraw")
+             .filter(f=>f.key!=="fee"||newTx.type!=="dividend")
              .filter(f=>!["ticker","name"].includes(f.key)||!["deposit","withdraw"].includes(newTx.type))
              .filter(f=>!["quantity","price"].includes(f.key)||!["dividend","deposit","withdraw"].includes(newTx.type))
              .map(f=>(
@@ -5499,10 +6226,10 @@ export default function App() {
                       if(f.key==="dividendPerShare"||f.key==="divTax"){
                         const perShare=parseFloat(f.key==="dividendPerShare"?e.target.value:newTx.dividendPerShare)||0;
                         const tax=parseFloat(f.key==="divTax"?e.target.value:newTx.divTax)||15;
-                        const holdQty=activeTransactions.filter(t=>["buy","sell"].includes(t.type)&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.type==="buy"?1:-1)*(t.quantity||0),0);
-                        const qty=parseFloat(newTx.quantity)||Math.max(0,holdQty)||1;
-                        const net=toCZK(perShare*qty*(1-tax/100),newTx.currency,rates);
-                        setNewTx(p=>({...p,[f.key]:e.target.value,dividendAmount:net.toFixed(2)}));
+                        const holdQty=activeTransactions.filter(t=>t.type==="buy"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0);
+                        const qty=parseFloat(newTx.quantity)||holdQty||1;
+                        const netOrig=parseFloat((perShare*qty*(1-tax/100)).toFixed(5)); // in original currency
+                        setNewTx(p=>({...p,[f.key]:e.target.value,dividendAmount:netOrig.toString()}));
                       }
                     }}
                     onBlur={f.key==="ticker"?(e=>{
@@ -5527,9 +6254,8 @@ export default function App() {
                 {(()=>{
                   const ps=parseFloat(newTx.dividendPerShare)||0;
                   const tax=parseFloat(newTx.divTax)||15;
-                  const divDate=newTx.date||new Date().toISOString().slice(0,10);
-                  const hq=activeTransactions.filter(t=>["buy","sell"].includes(t.type)&&t.ticker===newTx.ticker&&t.date<=divDate).reduce((s,t)=>s+(t.type==="buy"?1:-1)*(t.quantity||0),0);
-                  const qty=parseFloat(newTx.quantity)||Math.max(0,hq)||0;
+                  const hq=activeTransactions.filter(t=>t.type==="buy"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0);
+                  const qty=parseFloat(newTx.quantity)||hq||0;
                   const gross=ps*qty;
                   const net=toCZK(gross*(1-tax/100),newTx.currency,rates);
                   return `${qty} ks × ${ps} = ${gross.toFixed(2)} ${newTx.currency} → ${net.toFixed(0)} Kč (daň ${tax}%)`;
@@ -5538,15 +6264,16 @@ export default function App() {
             )}
             <div style={{display:"flex",gap:8,marginTop:16}}>
               <button style={{...S.btn("primary"),flex:1,padding:"11px"}} onClick={()=>{
-                let divAmount=parseFloat(newTx.dividendAmount)||0;
-                if(newTx.type==="dividend"&&newTx.dividendPerShare){
-                  const perShare=parseFloat(newTx.dividendPerShare)||0;
-                  const tax=parseFloat(newTx.divTax)||15;
-                  const divDate2=newTx.date||new Date().toISOString().slice(0,10);
-                  const hq=activeTransactions.filter(t=>["buy","sell"].includes(t.type)&&t.ticker===newTx.ticker&&t.date<=divDate2).reduce((s,t)=>s+(t.type==="buy"?1:-1)*(t.quantity||0),0);
-                  const qty=parseFloat(newTx.quantity)||Math.max(0,hq)||1;
-                  divAmount=toCZK(perShare*qty*(1-tax/100),newTx.currency,rates);
-                }
+                // Dividend: recompute exactly like the hint (ps × qty × (1-tax) → toCZK)
+                // This avoids double-conversion from the dividendAmount field
+                const _ps = parseFloat(newTx.dividendPerShare)||0;
+                const _tax = parseFloat(newTx.divTax)||15;
+                const _hq = activeTransactions.filter(t=>t.type==="buy"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0) - activeTransactions.filter(t=>t.type==="sell"&&t.ticker===newTx.ticker).reduce((s,t)=>s+(t.quantity||0),0);
+                const _qty = parseFloat(newTx.quantity)||_hq||0;
+                const divNetOrig = _ps && _qty ? parseFloat((_ps*_qty*(1-_tax/100)).toFixed(5)) : (parseFloat(newTx.dividendAmount)||0);
+                const divAmountCZK = newTx.type==="dividend"
+                  ? Math.round(toCZK(_ps && _qty ? _ps*_qty*(1-_tax/100) : divNetOrig, newTx.currency, rates) * 100) / 100
+                  : 0;
                 // Check for duplicate
                 const isDup = activeTransactions.some(t =>
                   t.type===newTx.type && t.ticker===newTx.ticker &&
@@ -5555,32 +6282,15 @@ export default function App() {
                 );
                 if (isDup && !window.confirm("⚠ Zdá se, že tato transakce již existuje (stejný typ, ticker, datum, množství a cena). Opravdu přidat?")) return;
                 const tx={id:Date.now().toString(),portfolioId:activePortfolioId,...newTx,
-                  quantity:parseFloat(newTx.quantity)||0,price:parseFloat(newTx.price)||0,
+                  quantity:parseFloat(newTx.quantity)||0,
+                  price: newTx.type==="dividend" ? divNetOrig : (parseFloat(newTx.price)||0), // Cena col: orig currency for div
                   fee:parseFloat(newTx.fee)||0,
-                  dividendAmount:divAmount,
-                  dividendAmountCZK: divAmount, // always CZK
-                  currency: newTx.currency, // keep original currency for reference
+                  dividendAmount: newTx.type==="dividend" ? divAmountCZK : 0, // ALWAYS CZK
+                  dividendCZK: newTx.type==="dividend" ? true : undefined, // flag: dividendAmount is in CZK
+                  currency: newTx.currency,
                   dividendPerShare:parseFloat(newTx.dividendPerShare)||0,
                   amount:parseFloat(newTx.amount)||0};
-                setTransactions(prev=>{
-                  const updated=[...prev,tx];
-                  // Bug 3 fix: retroactively recalculate existing dividends for same ticker
-                  if(tx.type==="buy"){
-                    return updated.map(t=>{
-                      if(t.type==="dividend"&&t.ticker===tx.ticker&&t.dividendPerShare&&t.dividendPerShare>0){
-                        const divDate=t.date||"";
-                        const holdQty=updated.filter(u=>["buy","sell"].includes(u.type)&&u.ticker===tx.ticker&&u.date<=divDate)
-                          .reduce((s,u)=>s+(u.type==="buy"?1:-1)*(u.quantity||0),0);
-                        const qty=Math.max(0,holdQty)||1;
-                        const tax=t.divTax||15;
-                        const newAmt=toCZK(t.dividendPerShare*qty*(1-tax/100),t.currency||"CZK",rates);
-                        return {...t,dividendAmount:newAmt,dividendAmountCZK:newAmt};
-                      }
-                      return t;
-                    });
-                  }
-                  return updated;
-                });
+                setTransactions(prev=>[...prev,tx]);
                 if(tx.ticker&&!["VKLAD","VÝBĚR",""].includes(tx.ticker)){
                   if(!prices[tx.ticker]) setPrices(prev=>({...prev,[tx.ticker]:{price:tx.price||0,currency:tx.currency||"USD",change1d:0}}));
                   setTimeout(()=>{fetchPrices([tx.ticker]);lookupTickerName(tx.ticker);},300);
