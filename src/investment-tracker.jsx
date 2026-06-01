@@ -4837,7 +4837,7 @@ export default function App() {
                     <button key={i} style={{...S.btn("danger"),display:"block",width:"100%",textAlign:"left",marginBottom:8,padding:"10px 14px"}}
                       onClick={()=>{
                         const count=activeTransactions.filter(t=>opt.types.includes(t.type)).length;
-                        if(!window.confirm(`⚠ Opravdu smazat ${count} transakcí (${opt.label})? Tato akce je nevratná.`)) return;
+                        if(!window.confirm(`⚠ Opravdu smazat ${count} transakcí (${opt.label})?\n\nTato akce je nevratná.`)) return;
                         setTransactions(prev=>prev.filter(t=>{
                           const pid=t.portfolioId||activePortfolioId;
                           if(pid!==activePortfolioId) return true;
@@ -5495,12 +5495,12 @@ export default function App() {
                       if(f.key==="dividendPerShare"||f.key==="divTax"){
                         const perShare=parseFloat(f.key==="dividendPerShare"?e.target.value:newTx.dividendPerShare)||0;
                         const tax=parseFloat(f.key==="divTax"?e.target.value:newTx.divTax)||15;
-                        // Počítej jen akcie vlastněné KE DNI dividendy (nákupy − prodeje před tímto datem)
+                        // Počítej akcie ke dni dividendy (nákupy − prodeje před tímto datem)
                         const divDate=newTx.date||new Date().toISOString().slice(0,10);
                         const txBefore=activeTransactions.filter(t=>t.ticker===newTx.ticker&&t.date<=divDate);
-                        const boughtQty=txBefore.filter(t=>t.type==="buy").reduce((s,t)=>s+(t.quantity||0),0);
-                        const soldQty=txBefore.filter(t=>t.type==="sell").reduce((s,t)=>s+(t.quantity||0),0);
-                        const holdQty=Math.max(0,boughtQty-soldQty);
+                        const bQ=txBefore.filter(t=>t.type==="buy").reduce((s,t)=>s+(t.quantity||0),0);
+                        const sQ=txBefore.filter(t=>t.type==="sell").reduce((s,t)=>s+(t.quantity||0),0);
+                        const holdQty=Math.max(0,bQ-sQ);
                         const qty=parseFloat(newTx.quantity)||holdQty||1;
                         const net=toCZK(perShare*qty*(1-tax/100),newTx.currency,rates);
                         setNewTx(p=>({...p,[f.key]:e.target.value,dividendAmount:net.toFixed(2)}));
@@ -5546,6 +5546,7 @@ export default function App() {
                 if(newTx.type==="dividend"&&newTx.dividendPerShare){
                   const perShare=parseFloat(newTx.dividendPerShare)||0;
                   const tax=parseFloat(newTx.divTax)||15;
+                  // Akcie ke dni dividendy: nákupy − prodeje
                   const divDate=newTx.date||new Date().toISOString().slice(0,10);
                   const txBefore=activeTransactions.filter(t=>t.ticker===newTx.ticker&&t.date<=divDate);
                   const bQ=txBefore.filter(t=>t.type==="buy").reduce((s,t)=>s+(t.quantity||0),0);
@@ -5571,14 +5572,13 @@ export default function App() {
                   amount:parseFloat(newTx.amount)||0};
                 setTransactions(prev=>{
                   const withNew=[...prev,tx];
-                  // Bug 3: Pokud přidáváme nákup, přepočítej dividendy pro stejný ticker,
-                  // které mají uloženou dividendPerShare — množství mohlo být jiné
+                  // Bug fix: při zpětném přidání nákupu přepočítej dividendy pro tento ticker
+                  // kde je uložena dividendPerShare (máme data pro přepočet)
                   if(tx.type==="buy"&&tx.ticker){
                     return withNew.map(t=>{
                       if(t.type!=="dividend"||t.ticker!==tx.ticker||!t.dividendPerShare) return t;
-                      // Spočítej počet akcií ke dni dividendy z aktuálního seznamu (včetně nového nákupu)
                       const divDate=t.date;
-                      const allForTicker=withNew.filter(x=>x.ticker===tx.ticker&&x.portfolioId===activePortfolioId&&x.date<=divDate);
+                      const allForTicker=withNew.filter(x=>x.ticker===tx.ticker&&(x.portfolioId||activePortfolioId)===activePortfolioId&&x.date<=divDate);
                       const bQ=allForTicker.filter(x=>x.type==="buy").reduce((s,x)=>s+(x.quantity||0),0);
                       const sQ=allForTicker.filter(x=>x.type==="sell").reduce((s,x)=>s+(x.quantity||0),0);
                       const ownedQty=Math.max(0,bQ-sQ);
