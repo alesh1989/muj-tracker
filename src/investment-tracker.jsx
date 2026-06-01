@@ -1688,8 +1688,7 @@ ${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.rec
               </div>
             </div>
           )}
-      </>
-      )}
+      </>}
     </div>
   );
 }
