@@ -1535,7 +1535,7 @@ ${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.rec
         <RebalanceTab S={S} lang={lang} rates={rates} darkMode={darkMode} textPrimary={textPrimary} textMuted={textMuted} border={border} portfolio={portfolio}/>
       )}
 
-      {tipySubTab==="tips" && <>
+      {tipySubTab==="tips" ? <>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18,flexWrap:"wrap",gap:10}}>
         <div>
           <div style={{fontSize:18,fontWeight:800,color:textPrimary}}>💡 Tipy na podhodnocené akcie</div>
@@ -1688,7 +1688,9 @@ ${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.rec
               </div>
             </div>
           )}
-      </>}
+        </>
+      )}
+      </> : null}
     </div>
   );
 }
