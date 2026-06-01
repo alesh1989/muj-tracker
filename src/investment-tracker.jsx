@@ -174,7 +174,7 @@ const BarChart = ({ data }) => {
 };
 
 // ─── GROWTH CHART (from first transaction → now) ──────────────────────────────
-const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, activeBenchmarks=[], benchmarkOptions=[], portfolioCurrentCZK=0 }) => {
+const GrowthChart = ({ transactions, prices, rates, yearFilter, benchmarks={}, activeBenchmarks=[], benchmarkOptions=[], portfolioCurrentCZK=0, lang="cs" }) => {
   const [tooltip, setTooltip] = useState(null);
   const svgRef = useRef(null);
 
@@ -1194,7 +1194,7 @@ function parseCsv(text) {
   return { headers, rows, error: null };
 }
 
-function CsvImportModal({ onClose, onImport, S }) {
+function CsvImportModal({ onClose, onImport, S, lang="cs" }) {
   const [step, setStep] = useState("upload"); // upload | preview | done
   const [parsed, setParsed] = useState([]);
   const [selected, setSelected] = useState({});
@@ -1714,8 +1714,8 @@ ${(r.analysts?.recentUpgrades||[]).length?"<h2>Upgrady</h2><ul>"+(r.analysts.rec
             </div>
           )}
         </>
+      </>
       )}
-      </>}
     </div>
   );
 }
@@ -2461,7 +2461,7 @@ function CandlestickChart({ ticker: initialTicker, S }) {
 }
 
 // ─── FUNDAMENTAL CHARTS COMPONENT ────────────────────────────────────────────
-const FundamentalCharts = ({ S }) => {
+const FundamentalCharts = ({ S, lang="cs" }) => {
   const [ticker, setTicker] = useState("AAPL");
   const [inputTicker, setInputTicker] = useState("AAPL");
   const [loading, setLoading] = useState(false);
@@ -2965,7 +2965,7 @@ function AnalyzaTab({ rates, S, t=T.cs, lang="cs" }) {
         ))}
       </div>
       {subTab==="graf" && <CandlestickChart S={S} />}
-      {subTab==="fundamenty" && <FundamentalCharts S={S} />}
+      {subTab==="fundamenty" && <FundamentalCharts S={S} lang={lang} />}
       {subTab==="oceneni" && <ValuationAnalyzer rates={rates} />}
     </>
   );
@@ -5017,7 +5017,7 @@ export default function App() {
                 <GrowthChart transactions={activeTransactions} prices={prices} rates={rates}
                   yearFilter={chartYear} benchmarks={benchmarks}
                   activeBenchmarks={activeBenchmarks} benchmarkOptions={BENCHMARK_OPTIONS}
-                  portfolioCurrentCZK={portfolio.totalCurrentCZK} />
+                  portfolioCurrentCZK={portfolio.totalCurrentCZK} lang={lang} />
               </div>
               <div style={S.card}>
                 <div style={S.sectionTitle}>Alokace</div>
